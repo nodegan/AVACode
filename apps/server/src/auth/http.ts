@@ -25,6 +25,7 @@ import {
 import type { AuthEnvironmentScope } from "@t3tools/contracts";
 import { parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import { identity } from "effect/Function";
@@ -82,7 +83,7 @@ export function annotateEnvironmentRequest(endpoint: string) {
             endpoint,
             traceId,
             errorTag: causeErrorTag(exit.cause),
-            cause: exit.cause,
+            cause: Cause.pretty(exit.cause),
           })
         : Effect.void,
     );
