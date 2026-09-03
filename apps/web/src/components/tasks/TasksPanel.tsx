@@ -1,10 +1,4 @@
-import {
-  makeEnvironmentHttpApiClient,
-  executeEnvironmentHttpRequest,
-} from "@t3tools/client-runtime/rpc";
-import { type PreparedConnection } from "@t3tools/client-runtime/connection";
-import { environmentEndpointUrl } from "@t3tools/client-runtime/environment";
-import { ManagedRelay } from "@t3tools/client-runtime/relay";
+import type { PreparedConnection } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type {
   Task,
@@ -17,9 +11,6 @@ import type {
 } from "@t3tools/contracts";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import { FetchHttpClient, type HttpMethod } from "effect/unstable/http";
 import {
   ArrowLeftIcon,
   CalendarIcon,
@@ -28,6 +19,7 @@ import {
   FolderIcon,
   FolderOpenIcon,
   Link2Icon,
+  LinkIcon,
   ListIcon,
   Loader2Icon,
   MessageSquareIcon,
@@ -38,7 +30,17 @@ import {
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { runtime } from "~/lib/runtime";
+import {
+  addTaskComment,
+  createManualTask,
+  fetchTaskPanel,
+  fetchTasksQuery,
+  setTaskLinkedThread,
+  syncClickUpTasks,
+} from "./taskApi";
+import { deleteTask as deleteTaskRequest } from "./taskApi";
+import { TaskDetailsDialog, TaskStatusBadge } from "./TaskDetailsDialog";
+import { notifyTasksChanged } from "./taskLinkStore";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -56,11 +58,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { newThreadId } from "~/lib/utils";
 import { cn } from "~/lib/utils";
 
-interface EnvironmentHttpAuthHeaders {
-  readonly authorization?: string;
-  readonly dpop?: string;
-}
-
 interface TaskPanelThreadContext {
   readonly id: string;
   readonly modelSelection: EnvironmentThreadShell["modelSelection"];
@@ -68,95 +65,7 @@ interface TaskPanelThreadContext {
   readonly interactionMode: EnvironmentThreadShell["interactionMode"];
 }
 
-function withEnvironmentCredentials<A, E, R>(
-  authorization: PreparedConnection["httpAuthorization"],
-  request: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> {
-  return authorization === null
-    ? request.pipe(Effect.provideService(FetchHttpClient.RequestInit, { credentials: "include" }))
-    : request;
-}
-
-function buildEnvironmentAuthHeaders(
-  authorization: PreparedConnection["httpAuthorization"],
-  method: HttpMethod.HttpMethod,
-  url: string,
-  signer: Option.Option<ManagedRelay.ManagedRelayDpopSigner["Service"]>,
-) {
-  return Effect.gen(function* () {
-    if (authorization === null) {
-      return {};
-    }
-    if (authorization._tag === "Bearer") {
-      return { authorization: `Bearer ${authorization.token}` };
-    }
-    if (Option.isNone(signer)) {
-      return yield* Effect.fail("No DPoP signer is available for this environment.");
-    }
-    const proof = yield* signer.value.createProof({
-      method,
-      url,
-      accessToken: authorization.accessToken,
-    });
-    return {
-      authorization: `DPoP ${authorization.accessToken}`,
-      dpop: proof,
-    };
-  });
-}
-
-async function runTasksRequest<A, E>(
-  prepared: PreparedConnection,
-  requestUrl: string,
-  method: HttpMethod.HttpMethod,
-  request: (
-    client: Effect.Success<ReturnType<typeof makeEnvironmentHttpApiClient>>,
-    headers: EnvironmentHttpAuthHeaders,
-  ) => Effect.Effect<A, E>,
-  timeoutMs = 8_000,
-): Promise<A> {
-  return runtime.runPromise(
-    Effect.gen(function* () {
-      const client = yield* makeEnvironmentHttpApiClient(prepared.httpBaseUrl);
-      const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
-      const headers = yield* buildEnvironmentAuthHeaders(
-        prepared.httpAuthorization,
-        method,
-        requestUrl,
-        signer,
-      );
-      return yield* executeEnvironmentHttpRequest(
-        requestUrl,
-        timeoutMs,
-        withEnvironmentCredentials(prepared.httpAuthorization, request(client, headers)),
-      );
-    }),
-  );
-}
-
-async function fetchTaskPanel(prepared: PreparedConnection): Promise<TaskPanel> {
-  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/panel");
-  return runTasksRequest(prepared, requestUrl, "GET", (client, headers) =>
-    client.tasks.panel({
-      headers,
-    }),
-  );
-}
-
 const TASKS_PAGE_SIZE = 10;
-
-async function fetchTasksQuery(
-  prepared: PreparedConnection,
-  filter: TaskQueryFilter,
-): Promise<TaskQueryResult> {
-  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/query");
-  return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
-    client.tasks.queryTasks({
-      headers,
-      payload: { filter },
-    }),
-  );
-}
 
 type ListSelection = { readonly kind: "all" } | { readonly kind: "list"; listId: string };
 
@@ -175,194 +84,133 @@ const statusCategoryLabels: Record<TaskStatusCategory, string> = {
   unknown: "Unknown",
 };
 
-function formatTaskStatusLabel(task: Task): string {
-  switch (task.statusCategory) {
-    case "done":
-      return "Done";
-    case "in_progress":
-      return "In progress";
-    case "blocked":
-      return "Blocked";
-    case "open":
-      return "Open";
-    default:
-      return task.statusLabel;
-  }
-}
-
-function statusTone(status: TaskStatusCategory): string {
-  switch (status) {
-    case "done":
-      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
-    case "in_progress":
-      return "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
-    case "blocked":
-      return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
-    case "open":
-      return "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300";
-    default:
-      return "border-border bg-muted text-muted-foreground";
-  }
-}
-
-function TaskStatusBadge({ task }: { task: Task }) {
-  return (
-    <span
-      className={cn(
-        "rounded-full border px-2 py-0.5 text-[11px] font-medium",
-        statusTone(task.statusCategory),
-      )}
-    >
-      {formatTaskStatusLabel(task)}
-    </span>
-  );
-}
-
 interface TaskCardProps {
   task: Task;
-  environmentId: string;
-  activeThreadId: ThreadId;
+  isCurrentThread: boolean;
   busyKey: string | null;
-  commentDraft: string;
-  commentsOpen: boolean;
-  onCommentDraftChange: (taskId: string, value: string) => void;
-  onToggleComments: (taskId: string) => void;
-  onAddComment: (taskId: TaskId) => void;
-  onDelete: (taskId: TaskId) => void;
-  onLink: (taskId: TaskId, threadId: ThreadId) => void;
-  onCreateThread: (task: Task) => void;
-  onNavigateThread: (environmentId: string, threadId: ThreadId) => void;
+  onOpenDetails: (taskId: string) => void;
+  onLink: (taskId: TaskId) => void;
+  onUnlink: (taskId: TaskId) => void;
 }
 
+const cardActionClassName =
+  "inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50";
+
 function TaskCard(props: TaskCardProps) {
-  const { task, activeThreadId, busyKey } = props;
-  const isLinkedToCurrentThread = task.linkedThreadId === activeThreadId;
-  const linkedThreadId = task.linkedThreadId;
-  const commentDraft = props.commentDraft;
+  const { task } = props;
 
   return (
-    <article className="rounded-xl border border-border/70 bg-card/80 p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h4 className="truncate text-sm font-semibold">{task.title}</h4>
-            <TaskStatusBadge task={task} />
-            {task.source === "manual" ? (
-              <span className="rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground">
-                Manual
-              </span>
-            ) : null}
-          </div>
-          {task.description ? (
-            <p className="mt-1.5 line-clamp-3 whitespace-pre-wrap text-xs text-muted-foreground">
-              {task.description}
-            </p>
-          ) : null}
-          <div className="mt-1.5 flex flex-wrap items-center gap-3">
-            {task.externalUrl ? (
-              <a
-                href={task.externalUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-              >
-                Open in ClickUp
-              </a>
-            ) : null}
+    <article
+      role="button"
+      tabIndex={0}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("button, a")) return;
+        props.onOpenDetails(task.id);
+      }}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          props.onOpenDetails(task.id);
+        }
+      }}
+      className="flex h-full cursor-pointer flex-col rounded-xl border border-border/70 bg-card/80 p-3 outline-none transition hover:border-border hover:bg-accent/40 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24"
+    >
+      <div className="flex items-center gap-2">
+        <TaskStatusBadge task={task} />
+        {task.source === "manual" ? (
+          <span className="rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground">
+            Manual
+          </span>
+        ) : null}
+        {props.isCurrentThread ? (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+            <Link2Icon className="size-3" />
+            This thread
+          </span>
+        ) : null}
+      </div>
+      <h4 className="mt-2 truncate text-sm font-semibold">{task.title}</h4>
+      <p
+        className={cn(
+          "mt-1 line-clamp-1 min-h-4 whitespace-pre-wrap text-xs leading-4 text-muted-foreground",
+          !task.description && "italic",
+        )}
+      >
+        {task.description || "No description."}
+      </p>
+      <div className="mt-2 flex h-6 flex-nowrap items-center gap-3 overflow-hidden text-[11px] whitespace-nowrap text-muted-foreground">
+        <span className="inline-flex min-w-0 items-center gap-1">
+          <CalendarIcon className="size-3 shrink-0" />
+          <span className="truncate">
+            Created{" "}
+            {new Date(task.createdAt).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </span>
+        </span>
+        {task.externalListName ? (
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <ListIcon className="size-3 shrink-0" />
+            <span className="truncate">{task.externalListName}</span>
+          </span>
+        ) : null}
+        {task.assignees.length > 0 ? (
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <UserIcon className="size-3 shrink-0" />
+            <span className="truncate">{task.assignees.join(", ")}</span>
+          </span>
+        ) : null}
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1">
+          <MessageSquareIcon className="size-3" />
+          {task.comments.length}
+        </span>
+        <span className="inline-flex shrink-0 items-center gap-0.5">
+          {task.linkedThreadId ? (
             <button
               type="button"
-              onClick={() => props.onToggleComments(task.id)}
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground transition hover:text-foreground"
+              aria-label="Unlink from thread"
+              title="Unlink from thread"
+              disabled={props.busyKey === `task-link:${task.id}`}
+              className={cardActionClassName}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onUnlink(task.id);
+              }}
             >
-              <MessageSquareIcon className="size-3" />
-              {task.comments.length > 0 ? `${task.comments.length}` : "Comment"}
+              <LinkIcon className="size-3.5" />
             </button>
-          </div>
-        </div>
-        <div className="flex shrink-0 flex-wrap justify-end gap-2">
-          {task.source === "manual" ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => props.onDelete(task.id)}
-              disabled={busyKey === `task-delete:${task.id}`}
+          ) : (
+            <button
+              type="button"
+              aria-label="Link current thread"
+              title="Link current thread"
+              disabled={props.busyKey === `task-link:${task.id}`}
+              className={cardActionClassName}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onLink(task.id);
+              }}
             >
-              Delete
-            </Button>
+              <Link2Icon className="size-3.5" />
+            </button>
+          )}
+          {task.externalUrl ? (
+            <a
+              href={task.externalUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Open in ClickUp"
+              title="Open in ClickUp"
+              className={cardActionClassName}
+            >
+              <ExternalLinkIcon className="size-3.5" />
+            </a>
           ) : null}
-          {linkedThreadId ? (
-            <>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => props.onNavigateThread(props.environmentId, linkedThreadId)}
-              >
-                <Link2Icon className="size-3.5" />
-                Open thread
-              </Button>
-              {!isLinkedToCurrentThread ? (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => props.onLink(task.id, activeThreadId)}
-                  disabled={busyKey === `task-link:${task.id}`}
-                >
-                  Link current
-                </Button>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <Button size="sm" variant="ghost" onClick={() => props.onCreateThread(task)}>
-                <SquareCheckBigIcon className="size-3.5" />
-                Create thread
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => props.onLink(task.id, activeThreadId)}
-                disabled={busyKey === `task-link:${task.id}`}
-              >
-                Link current
-              </Button>
-            </>
-          )}
-        </div>
+        </span>
       </div>
-
-      {props.commentsOpen ? (
-        <div className="mt-3 space-y-2 border-t border-border/60 pt-3">
-          {task.comments.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No comments yet.</p>
-          ) : (
-            <div className="space-y-2">
-              {task.comments.map((comment) => (
-                <div key={comment.id} className="rounded-lg bg-muted/50 p-2.5">
-                  <p className="whitespace-pre-wrap text-sm">{comment.body}</p>
-                  <p className="mt-1 text-[11px] text-muted-foreground">
-                    {new Date(comment.createdAt).toLocaleString()}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="flex gap-2">
-            <Textarea
-              value={commentDraft}
-              onChange={(event) => props.onCommentDraftChange(task.id, event.target.value)}
-              placeholder="Add a local comment"
-              className="min-h-9"
-            />
-            <Button
-              size="sm"
-              onClick={() => props.onAddComment(task.id)}
-              disabled={busyKey === `comment:${task.id}` || commentDraft.trim().length === 0}
-            >
-              Add
-            </Button>
-          </div>
-        </div>
-      ) : null}
     </article>
   );
 }
@@ -441,7 +289,7 @@ export function TasksPanel(props: {
   const [manualTitle, setManualTitle] = useState("");
   const [manualDescription, setManualDescription] = useState("");
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
-  const [openComments, setOpenComments] = useState<Record<string, boolean>>({});
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const [tasksResult, setTasksResult] = useState<TaskQueryResult | null>(null);
@@ -528,6 +376,7 @@ export function TasksPanel(props: {
           await loadPanel();
         }
         await loadTasks();
+        notifyTasksChanged(props.environmentId);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Task request failed.");
         if (key === "clickup-sync" || key === "clickup-token") {
@@ -541,20 +390,15 @@ export function TasksPanel(props: {
         setBusyKey(null);
       }
     },
-    [loadPanel, loadTasks, prepared],
+    [loadPanel, loadTasks, prepared, props.environmentId],
   );
 
   const syncNow = useCallback(() => {
     void runMutation("clickup-sync", async (connection) => {
-      const requestUrl = environmentEndpointUrl(connection.httpBaseUrl, "/api/tasks/clickup/sync");
       // The server starts the sync in a detached fiber and answers right away.
       // Poll the panel until lastSyncAt moves (or an error lands) instead of
       // holding this request open, where any hop can cut it.
-      await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
-        client.tasks.syncClickUpTasks({
-          headers,
-        }),
-      );
+      await syncClickUpTasks(connection);
       const initialLastSyncAt = panel?.clickup.lastSyncAt ?? null;
       const initialLastSyncError = panel?.clickup.lastSyncError ?? null;
       let latest = panel;
@@ -584,34 +428,32 @@ export function TasksPanel(props: {
     const title = manualTitle.trim();
     if (!title) return;
     void runMutation("manual-create", async (connection) => {
-      const requestUrl = environmentEndpointUrl(connection.httpBaseUrl, "/api/tasks/manual");
-      await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
-        client.tasks.createManual({
-          headers,
-          payload: {
-            title,
-            ...(manualDescription.trim() ? { description: manualDescription.trim() } : {}),
-          },
-        }),
-      );
+      await createManualTask(connection, {
+        title,
+        ...(manualDescription.trim() ? { description: manualDescription.trim() } : {}),
+      });
       setManualTitle("");
       setManualDescription("");
     });
   }, [manualDescription, manualTitle, runMutation]);
 
   const setTaskLink = useCallback(
-    (taskId: TaskId, linkedThreadId: ThreadId) => {
+    (taskId: TaskId, linkedThreadId: ThreadId | null) => {
       void runMutation(`task-link:${taskId}`, async (connection) => {
-        const requestUrl = environmentEndpointUrl(connection.httpBaseUrl, "/api/tasks/task");
-        await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
-          client.tasks.updateTask({
-            headers,
-            payload: { taskId, linkedThreadId },
-          }),
-        );
+        await setTaskLinkedThread(connection, taskId, linkedThreadId);
       });
     },
     [runMutation],
+  );
+
+  const setTaskLinkCurrent = useCallback(
+    (taskId: TaskId) => setTaskLink(taskId, activeThreadId),
+    [activeThreadId, setTaskLink],
+  );
+
+  const setTaskLinkUnlinked = useCallback(
+    (taskId: TaskId) => setTaskLink(taskId, null),
+    [setTaskLink],
   );
 
   const addComment = useCallback(
@@ -619,13 +461,7 @@ export function TasksPanel(props: {
       const body = commentDrafts[taskId]?.trim();
       if (!body) return;
       void runMutation(`comment:${taskId}`, async (connection) => {
-        const requestUrl = environmentEndpointUrl(connection.httpBaseUrl, "/api/tasks/comments");
-        await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
-          client.tasks.addComment({
-            headers,
-            payload: { taskId, body },
-          }),
-        );
+        await addTaskComment(connection, taskId, body);
         setCommentDrafts((current) => ({ ...current, [taskId]: "" }));
       });
     },
@@ -635,13 +471,7 @@ export function TasksPanel(props: {
   const deleteTask = useCallback(
     (taskId: TaskId) => {
       void runMutation(`task-delete:${taskId}`, async (connection) => {
-        const requestUrl = environmentEndpointUrl(connection.httpBaseUrl, "/api/tasks/delete");
-        await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
-          client.tasks.deleteTask({
-            headers,
-            payload: { taskId },
-          }),
-        );
+        await deleteTaskRequest(connection, taskId);
       });
     },
     [runMutation],
@@ -717,6 +547,14 @@ export function TasksPanel(props: {
       clickupGroups: [...byList.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
     };
   }, [tasksResult?.tasks]);
+
+  const selectedTask = useMemo(
+    () =>
+      selectedTaskId
+        ? (tasksResult?.tasks.find((task) => task.id === selectedTaskId) ?? null)
+        : null,
+    [selectedTaskId, tasksResult],
+  );
 
   const facets = panel?.facets ?? null;
   const totalTasks = tasksResult?.total ?? 0;
@@ -814,23 +652,6 @@ export function TasksPanel(props: {
     setPage(1);
   }, []);
 
-  const taskCardHandlers = {
-    environmentId: props.environmentId,
-    activeThreadId,
-    busyKey,
-    onCommentDraftChange: (taskId: string, value: string) => {
-      setCommentDrafts((current) => ({ ...current, [taskId]: value }));
-    },
-    onToggleComments: (taskId: string) => {
-      setOpenComments((current) => ({ ...current, [taskId]: !current[taskId] }));
-    },
-    onAddComment: addComment,
-    onDelete: deleteTask,
-    onLink: setTaskLink,
-    onCreateThread: (task: Task) => void createLinkedThread(task),
-    onNavigateThread: navigateToThread,
-  } satisfies Omit<TaskCardProps, "task" | "commentDraft" | "commentsOpen">;
-
   const refreshButtons = (
     <Button
       size="sm"
@@ -850,11 +671,38 @@ export function TasksPanel(props: {
     <TaskCard
       key={task.id}
       task={task}
-      commentDraft={commentDrafts[task.id] ?? ""}
-      commentsOpen={openComments[task.id] ?? false}
-      {...taskCardHandlers}
+      isCurrentThread={task.linkedThreadId === activeThreadId}
+      busyKey={busyKey}
+      onOpenDetails={setSelectedTaskId}
+      onLink={setTaskLinkCurrent}
+      onUnlink={setTaskLinkUnlinked}
     />
   );
+
+  const taskDetailsDialog = selectedTask ? (
+    <TaskDetailsDialog
+      task={selectedTask}
+      activeThreadId={activeThreadId}
+      busyKey={busyKey}
+      commentDraft={commentDrafts[selectedTask.id] ?? ""}
+      onCommentDraftChange={(value) => {
+        setCommentDrafts((current) => ({ ...current, [selectedTask.id]: value }));
+      }}
+      onAddComment={() => addComment(selectedTask.id)}
+      onDelete={() => deleteTask(selectedTask.id)}
+      onLink={() => setTaskLink(selectedTask.id, activeThreadId)}
+      onUnlink={() => setTaskLink(selectedTask.id, null)}
+      onCreateThread={() => void createLinkedThread(selectedTask)}
+      onNavigateThread={() => {
+        if (selectedTask.linkedThreadId) {
+          navigateToThread(props.environmentId, selectedTask.linkedThreadId);
+        }
+      }}
+      onOpenChange={(open) => {
+        if (!open) setSelectedTaskId(null);
+      }}
+    />
+  ) : null;
 
   if (loading && panel === null) {
     return (
@@ -983,6 +831,7 @@ export function TasksPanel(props: {
             </div>
           ) : null}
         </div>
+        {taskDetailsDialog}
       </ScrollArea>
     );
   }

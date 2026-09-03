@@ -33,6 +33,7 @@ import {
   PlusIcon,
   SearchIcon,
   ServerIcon,
+  SquareCheckBigIcon,
   SquarePenIcon,
   TerminalIcon,
   Trash2Icon,
@@ -141,6 +142,7 @@ import {
   type SnoozePreset,
 } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { useTaskLinksByThreadId } from "./tasks/taskLinkStore";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
@@ -491,6 +493,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     gitStatus: gitStatus.data,
   });
   const prState = pr?.state ?? null;
+  const taskLink = useTaskLinksByThreadId(thread.environmentId).get(thread.id) ?? null;
 
   // Same semantics as v1 (never-visited counts as read): flipping the beta
   // flag must not light up every historical thread as unread.
@@ -841,6 +844,26 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     </span>
   ) : null;
 
+  const taskBadge = taskLink ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label={`Task: ${taskLink.title}`}
+            data-testid={`sidebar-v2-task-indicator-${thread.id}`}
+            className="inline-flex shrink-0 items-center justify-center rounded-sm text-primary"
+          />
+        }
+      >
+        <SquareCheckBigIcon className="size-3.5" />
+      </TooltipTrigger>
+      <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
+        Task: {taskLink.title}
+      </TooltipPopup>
+    </Tooltip>
+  ) : null;
+
   if (variant === "slim") {
     return (
       <li
@@ -881,6 +904,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             </span>
             {title}
             {terminalStatusIcon}
+            {taskBadge}
             {isRegeneratingTitle ? (
               <span role="status" className="sr-only">
                 Regenerating title
@@ -1153,6 +1177,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 <span className="flex-1" />
               )}
               {terminalStatusIcon}
+              {taskBadge}
               {prBadge}
               {diff ? (
                 <span className="shrink-0 font-mono">

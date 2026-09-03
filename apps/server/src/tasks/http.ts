@@ -41,6 +41,16 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "links",
+        Effect.fn("environment.tasks.links")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* tasks
+            .listLinks()
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_panel_failed", cause)));
+        }),
+      )
+      .handle(
         "createManual",
         Effect.fn("environment.tasks.createManual")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);

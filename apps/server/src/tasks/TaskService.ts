@@ -9,6 +9,7 @@ import {
   TaskComment as TaskCommentSchema,
   TaskFacets,
   TaskId,
+  type TaskLinksResult,
   type TaskQueryFilter,
   type TaskQueryResult,
   Task as TaskSchema,
@@ -16,7 +17,7 @@ import {
   type TaskStatusCategory,
   type TaskSyncConfig,
   QueryTasksInput,
-  type ThreadId,
+  ThreadId,
   UpdateTaskInput,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -46,6 +47,7 @@ interface TaskRow {
   readonly description: string;
   readonly statusLabel: string;
   readonly statusCategory: TaskStatusCategory;
+  readonly statusColor: string | null;
   readonly linkedThreadId: string | null;
   readonly externalTaskId: string | null;
   readonly externalUrl: string | null;
@@ -81,6 +83,7 @@ interface NormalizedTaskQueryFilter {
   readonly folderIds: ReadonlyArray<string>;
   readonly statuses: ReadonlyArray<TaskStatusCategory>;
   readonly assignees: ReadonlyArray<string>;
+  readonly linkedThreadId: string | null;
   readonly page: number;
   readonly pageSize: number;
 }
@@ -103,10 +106,12 @@ interface ClickUpTaskResponse {
   readonly description?: string | null;
   readonly markdown_description?: string | null;
   readonly url?: string | null;
-  readonly date_updated?: string | null;
+  readonly date_created?: string | number | null;
+  readonly date_updated?: string | number | null;
   readonly status?: {
     readonly status?: string;
     readonly type?: string;
+    readonly color?: string | null;
   } | null;
   readonly assignees?: ReadonlyArray<ClickUpAssigneeResponse | null>;
   readonly list?: {
@@ -233,6 +238,13 @@ export function parseClickUpTimestamp(value: string | number | null | undefined)
   return Option.getOrNull(DateTime.make(millis).pipe(Option.map(DateTime.formatIso)));
 }
 
+/** Keep only well-formed hex colors ("#rgb"/"#rrggbb"), uppercased. */
+export function normalizeStatusColor(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const raw = value.trim().toUpperCase();
+  return /^#(?:[0-9A-F]{3}|[0-9A-F]{6})$/.test(raw) ? raw : null;
+}
+
 /** Prefer the markdown description ClickUp can serve over the HTML fallback. */
 export function pickClickUpDescription(task: ClickUpTaskResponse): string {
   const markdown = task.markdown_description?.trim() ?? "";
@@ -301,6 +313,7 @@ function mapTaskRow(row: TaskRow, comments: ReadonlyArray<TaskComment>): Task {
     description: row.description,
     statusLabel: row.statusLabel,
     statusCategory: row.statusCategory,
+    statusColor: row.statusColor,
     linkedThreadId: row.linkedThreadId,
     externalTaskId: row.externalTaskId,
     externalUrl: row.externalUrl,
@@ -322,6 +335,7 @@ export class TaskService extends Context.Service<
     readonly queryTasks: (
       input: QueryTasksInput,
     ) => Effect.Effect<TaskQueryResult, TaskServiceFailure>;
+    readonly listLinks: () => Effect.Effect<TaskLinksResult, TaskServiceFailure>;
     readonly createManualTask: (
       input: CreateManualTaskInput,
     ) => Effect.Effect<Task, TaskServiceFailure>;
@@ -469,6 +483,7 @@ const make = Effect.gen(function* () {
       folderIds: dedupe(filter?.folderIds ?? []),
       statuses: [...new Set(filter?.statuses ?? [])],
       assignees: dedupe(filter?.assignees ?? []),
+      linkedThreadId: filter?.linkedThreadId?.trim() || null,
       page: Math.max(1, Math.floor(filter?.page ?? 1)),
       pageSize: Math.min(
         TASK_PAGE_SIZE_MAX,
@@ -504,6 +519,9 @@ const make = Effect.gen(function* () {
         )`,
       );
     }
+    if (filter.linkedThreadId) {
+      clauses.push(sql`linked_thread_id = ${filter.linkedThreadId}`);
+    }
     return sql.and(clauses);
   };
 
@@ -523,6 +541,7 @@ const make = Effect.gen(function* () {
         description,
         status_label AS "statusLabel",
         status_category AS "statusCategory",
+        status_color AS "statusColor",
         linked_thread_id AS "linkedThreadId",
         external_task_id AS "externalTaskId",
         external_url AS "externalUrl",
@@ -629,6 +648,7 @@ const make = Effect.gen(function* () {
           description,
           status_label AS "statusLabel",
           status_category AS "statusCategory",
+          status_color AS "statusColor",
           linked_thread_id AS "linkedThreadId",
           external_task_id AS "externalTaskId",
           external_url AS "externalUrl",
@@ -668,6 +688,7 @@ const make = Effect.gen(function* () {
         description,
         status_label,
         status_category,
+        status_color,
         linked_thread_id,
         external_task_id,
         external_url,
@@ -688,6 +709,7 @@ const make = Effect.gen(function* () {
         ${row.description},
         ${row.statusLabel},
         ${row.statusCategory},
+        ${row.statusColor},
         ${row.linkedThreadId},
         ${row.externalTaskId},
         ${row.externalUrl},
@@ -707,6 +729,7 @@ const make = Effect.gen(function* () {
         description = excluded.description,
         status_label = excluded.status_label,
         status_category = excluded.status_category,
+        status_color = excluded.status_color,
         linked_thread_id = excluded.linked_thread_id,
         external_task_id = excluded.external_task_id,
         external_url = excluded.external_url,
@@ -717,6 +740,7 @@ const make = Effect.gen(function* () {
         assignees_json = excluded.assignees_json,
         synced_at = excluded.synced_at,
         external_updated_at = excluded.external_updated_at,
+        created_at = excluded.created_at,
         updated_at = excluded.updated_at
     `.pipe(Effect.asVoid);
 
@@ -809,6 +833,40 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const listLinks: TaskService["Service"]["listLinks"] = () =>
+    Effect.gen(function* () {
+      const rows = yield* sql<{
+        readonly taskId: string;
+        readonly threadId: string;
+        readonly title: string;
+        readonly statusCategory: TaskStatusCategory;
+        readonly source: "manual" | "clickup";
+      }>`
+        SELECT
+          task_id AS "taskId",
+          linked_thread_id AS "threadId",
+          title,
+          status_category AS "statusCategory",
+          source
+        FROM tasks
+        WHERE linked_thread_id IS NOT NULL
+        ORDER BY updated_at DESC
+      `;
+      return {
+        links: rows.map((row) => ({
+          taskId: TaskId.make(row.taskId),
+          threadId: ThreadId.make(row.threadId),
+          title: row.title,
+          statusCategory: row.statusCategory,
+          source: row.source,
+        })),
+      } satisfies TaskLinksResult;
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.listLinks", "Failed to load task links", cause),
+      ),
+    );
+
   const createManualTask: TaskService["Service"]["createManualTask"] = (input) =>
     Effect.gen(function* () {
       const createdAt = yield* nowIso();
@@ -820,6 +878,7 @@ const make = Effect.gen(function* () {
         description: input.description?.trim() ?? "",
         statusLabel: "To do",
         statusCategory: "open",
+        statusColor: null,
         linkedThreadId: null,
         externalTaskId: null,
         externalUrl: null,
@@ -852,6 +911,7 @@ const make = Effect.gen(function* () {
         description: input.description ?? current.description,
         statusLabel: input.statusLabel ?? current.statusLabel,
         statusCategory: input.statusCategory ?? current.statusCategory,
+        statusColor: current.statusColor,
         linkedThreadId:
           input.linkedThreadId !== undefined ? input.linkedThreadId : current.linkedThreadId,
         externalTaskId: current.externalTaskId,
@@ -1002,11 +1062,13 @@ const make = Effect.gen(function* () {
         const existingRows = yield* sql<{
           readonly id: string;
           readonly createdAt: string;
+          readonly statusColor: string | null;
           readonly linkedThreadId: ThreadId | null;
         }>`
           SELECT
             task_id AS "id",
             created_at AS "createdAt",
+            status_color AS "statusColor",
             linked_thread_id AS "linkedThreadId"
           FROM tasks
           WHERE source = ${"clickup"}
@@ -1025,6 +1087,7 @@ const make = Effect.gen(function* () {
             statusType: task.status?.type ?? null,
             statusLabel: task.status?.status ?? null,
           }),
+          statusColor: normalizeStatusColor(task.status?.color) ?? existing?.statusColor ?? null,
           linkedThreadId: existing?.linkedThreadId ?? null,
           externalTaskId,
           externalUrl: task.url?.trim() ?? null,
@@ -1035,7 +1098,9 @@ const make = Effect.gen(function* () {
           assigneesJson: stringifyJsonArray(clickUpAssignees(task)),
           syncedAt,
           externalUpdatedAt: parseClickUpTimestamp(task.date_updated),
-          createdAt: existing?.createdAt ?? syncedAt,
+          // The ClickUp creation timestamp is the task's real age; the sync
+          // time is only a fallback for payloads that omit it.
+          createdAt: parseClickUpTimestamp(task.date_created) ?? existing?.createdAt ?? syncedAt,
           updatedAt: syncedAt,
         });
       }
@@ -1113,6 +1178,7 @@ const make = Effect.gen(function* () {
   return TaskService.of({
     getPanel,
     queryTasks,
+    listLinks,
     createManualTask,
     updateTask,
     deleteTask,

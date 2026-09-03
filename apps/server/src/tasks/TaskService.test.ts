@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { TaskId, TaskPanel } from "@t3tools/contracts";
+import { TaskId, TaskPanel, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -40,6 +41,7 @@ const clickUpPages = [
         name: "Fix login bug",
         markdown_description: "**bug**",
         url: "https://app.clickup.com/t/9hz",
+        date_created: "1567700000000",
         date_updated: "1567780450202",
         status: { status: "in progress", type: "custom" },
         assignees: [{ id: 1, username: "Ana" }],
@@ -360,6 +362,37 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       assert.strictEqual(folderOrList.total, 3);
     }).pipe(Effect.provide(TestLayers)),
   );
+
+  it.effect("queryTasks filters by linked thread and listLinks returns links", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const count = yield* seedTasks([{ title: "A" }, { title: "B" }, { title: "C" }]);
+      const firstId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${"0".padStart(12, "0")}`);
+      const secondId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${"1".padStart(12, "0")}`);
+      const threadA = ThreadId.make("thread-a");
+      const threadB = ThreadId.make("thread-b");
+      yield* sql`UPDATE tasks SET linked_thread_id = ${threadA} WHERE task_id = ${firstId}`;
+      yield* sql`UPDATE tasks SET linked_thread_id = ${threadA} WHERE task_id = ${secondId}`;
+      assert.strictEqual(count, 3);
+
+      const service = yield* TaskService;
+
+      const byThread = yield* service.queryTasks({
+        filter: { linkedThreadId: threadA },
+      });
+      assert.strictEqual(byThread.total, 2);
+      assert.ok(byThread.tasks.every((task) => task.linkedThreadId === threadA));
+
+      const byOtherThread = yield* service.queryTasks({
+        filter: { linkedThreadId: threadB },
+      });
+      assert.strictEqual(byOtherThread.total, 0);
+
+      const links = yield* service.listLinks();
+      assert.strictEqual(links.links.length, 2);
+      assert.ok(links.links.every((link) => link.threadId === threadA));
+    }).pipe(Effect.provide(TestLayers)),
+  );
 });
 
 it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the background", () =>
@@ -399,5 +432,10 @@ it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the backgro
     assert.strictEqual(byFolder.total, 101);
     assert.ok(byFolder.tasks.some((task) => task.title === "Fix login bug"));
     assert.ok(byFolder.tasks.some((task) => task.assignees.includes("Ana")));
+
+    // The stored creation date is ClickUp's, not the sync time.
+    const loginBug = byFolder.tasks.find((task) => task.title === "Fix login bug");
+    assert.ok(loginBug);
+    assert.strictEqual(loginBug.createdAt, DateTime.formatIso(DateTime.unsafeMake(1567700000000)));
   }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
 );

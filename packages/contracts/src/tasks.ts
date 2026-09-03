@@ -43,6 +43,9 @@ export const Task = Schema.Struct({
   description: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   statusLabel: TrimmedNonEmptyString,
   statusCategory: TaskStatusCategory,
+  statusColor: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   linkedThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   externalTaskId: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -108,6 +111,20 @@ export const TaskValueFacet = Schema.Struct({
 });
 export type TaskValueFacet = typeof TaskValueFacet.Type;
 
+export const TaskLinkSummary = Schema.Struct({
+  taskId: TaskId,
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  statusCategory: TaskStatusCategory,
+  source: TaskSource,
+});
+export type TaskLinkSummary = typeof TaskLinkSummary.Type;
+
+export const TaskLinksResult = Schema.Struct({
+  links: Schema.Array(TaskLinkSummary).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type TaskLinksResult = typeof TaskLinksResult.Type;
+
 export const TaskFacets = Schema.Struct({
   lists: Schema.Array(TaskListFacet).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   statuses: Schema.Array(TaskValueFacet).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
@@ -126,6 +143,7 @@ export const TaskQueryFilter = Schema.Struct({
   folderIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   statuses: Schema.optional(Schema.Array(TaskStatusCategory)),
   assignees: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  linkedThreadId: Schema.optional(ThreadId),
   page: Schema.optional(Schema.Number),
   pageSize: Schema.optional(Schema.Number),
 });

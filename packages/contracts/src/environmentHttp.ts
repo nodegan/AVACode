@@ -39,6 +39,7 @@ import {
   ClickUpConnectionStatus,
   DeleteTaskInput,
   Task,
+  TaskLinksResult,
   TaskPanel,
   TaskQueryResult,
   QueryTasksInput,
@@ -590,6 +591,13 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
       headers: OptionalBearerHeaders,
       payload: QueryTasksInput,
       success: TaskQueryResult,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("links", "/api/tasks/links", {
+      headers: OptionalBearerHeaders,
+      success: TaskLinksResult,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

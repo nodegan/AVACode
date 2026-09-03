@@ -8,6 +8,7 @@ import {
   Globe2Icon,
   LoaderIcon,
   SearchIcon,
+  SquareCheckBigIcon,
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
@@ -87,6 +88,7 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { useThreadDiscoveredPorts } from "../portDiscoveryState";
 import { openDiscoveredPort } from "./preview/openDiscoveredPort";
+import { useTaskLinksByThreadId } from "./tasks/taskLinkStore";
 import { useAtomCommand } from "../state/use-atom-command";
 import { previewEnvironment } from "../state/preview";
 import {
@@ -454,6 +456,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     gitStatus: gitStatus.data,
   });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+  const taskLink = useTaskLinksByThreadId(thread.environmentId).get(thread.id) ?? null;
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;
   const threadMetaClassName = isConfirmingArchive
@@ -694,6 +697,24 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               />
               <TooltipPopup side="top">
                 <PrStatusTooltipContent status={prStatus} />
+              </TooltipPopup>
+            </Tooltip>
+          )}
+          {taskLink && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    role="img"
+                    aria-label={`Task: ${taskLink.title}`}
+                    className="inline-flex shrink-0 items-center justify-center rounded-sm text-primary"
+                  />
+                }
+              >
+                <SquareCheckBigIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
+                Task: {taskLink.title}
               </TooltipPopup>
             </Tooltip>
           )}

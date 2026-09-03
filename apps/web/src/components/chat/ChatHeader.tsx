@@ -29,6 +29,7 @@ import ProjectScriptsControl, {
   type NewProjectScriptInput,
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
+import { ThreadTaskIndicator } from "../tasks/ThreadTaskIndicator";
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
@@ -300,6 +301,7 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
+        <ThreadTaskIndicator environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
