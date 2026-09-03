@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProjectId, ProjectTaskId, ProjectTaskPanel } from "@t3tools/contracts";
+import { TaskId, TaskPanel } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -14,10 +14,8 @@ import {
 import * as ServerSecretStoreModule from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
-import { ProjectTaskService } from "./ProjectTaskService.ts";
-import { ProjectTaskServiceLive } from "./ProjectTaskService.ts";
-
-const projectId = ProjectId.make("11111111-1111-4111-8111-111111111111");
+import { TaskService } from "./TaskService.ts";
+import { TaskServiceLive } from "./TaskService.ts";
 
 const ConfigLayer = Layer.fresh(
   ServerConfig.layerTest(process.cwd(), { prefix: "t3code-tasks-test-" }),
@@ -76,14 +74,14 @@ function pageForUrl(url: string): number {
   return Number(new URL(url).searchParams.get("page") ?? "0");
 }
 
-const TestLayers = ProjectTaskServiceLive.pipe(
+const TestLayers = TaskServiceLive.pipe(
   Layer.provide(ServerSecretStoreModule.layer.pipe(Layer.provide(ConfigLayer))),
   Layer.provide(FetchHttpClient.layer),
   Layer.provideMerge(SqlitePersistenceMemory),
 );
 
 // Same stack with the real ClickUp HTTP client swapped for a stub.
-const SyncTestLayers = ProjectTaskServiceLive.pipe(
+const SyncTestLayers = TaskServiceLive.pipe(
   Layer.provide(ServerSecretStoreModule.layer.pipe(Layer.provide(ConfigLayer))),
   Layer.provide(ClickUpStubLayer),
   Layer.provideMerge(SqlitePersistenceMemory),
@@ -101,16 +99,15 @@ interface SeedTask {
 
 const assigneesJson = (assignees: ReadonlyArray<string>): string => JSON.stringify(assignees);
 
-const describePanel = (panel: ProjectTaskPanel): string => JSON.stringify(panel);
+const describePanel = (panel: TaskPanel): string => JSON.stringify(panel);
 
 const seedTasks = Effect.fn("seedTasks")(function* (tasks: ReadonlyArray<SeedTask>) {
   const sql = yield* SqlClient.SqlClient;
   for (const [index, task] of tasks.entries()) {
-    const taskId = ProjectTaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${String(index).padStart(12, "0")}`);
+    const taskId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${String(index).padStart(12, "0")}`);
     yield* sql`
-      INSERT INTO project_tasks (
+      INSERT INTO tasks (
         task_id,
-        project_id,
         source,
         title,
         description,
@@ -131,7 +128,6 @@ const seedTasks = Effect.fn("seedTasks")(function* (tasks: ReadonlyArray<SeedTas
       )
       VALUES (
         ${taskId},
-        ${projectId},
         ${task.listId === undefined ? "manual" : "clickup"},
         ${task.title},
         ${""},
@@ -159,11 +155,10 @@ const seedManyClickUpTasks = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const count = 1000;
   for (let i = 0; i < count; i++) {
-    const taskId = ProjectTaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${String(i).padStart(12, "0")}`);
+    const taskId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${String(i).padStart(12, "0")}`);
     yield* sql`
-      INSERT INTO project_tasks (
+      INSERT INTO tasks (
         task_id,
-        project_id,
         source,
         title,
         description,
@@ -182,7 +177,6 @@ const seedManyClickUpTasks = Effect.gen(function* () {
       )
       VALUES (
         ${taskId},
-        ${projectId},
         ${"clickup"},
         ${`Task ${i}`},
         ${""},
@@ -204,7 +198,7 @@ const seedManyClickUpTasks = Effect.gen(function* () {
   return count;
 });
 
-it.layer(NodeServices.layer)("ProjectTaskService", (it) => {
+it.layer(NodeServices.layer)("TaskService", (it) => {
   it.effect("getPanel returns facets instead of the full task list", () =>
     Effect.gen(function* () {
       yield* seedTasks([
@@ -235,8 +229,8 @@ it.layer(NodeServices.layer)("ProjectTaskService", (it) => {
         { title: "D" },
       ]);
 
-      const service = yield* ProjectTaskService;
-      const panel = yield* service.getPanel(projectId);
+      const service = yield* TaskService;
+      const panel = yield* service.getPanel();
       assert.deepStrictEqual(
         panel.facets.lists.map(
           (list) => `${list.id}:${list.name}:${list.count}:${list.folderName ?? ""}`,
@@ -260,8 +254,8 @@ it.layer(NodeServices.layer)("ProjectTaskService", (it) => {
       const seeded = yield* seedManyClickUpTasks;
       assert.strictEqual(seeded, 1000);
 
-      const service = yield* ProjectTaskService;
-      const result = yield* service.queryTasks({ projectId });
+      const service = yield* TaskService;
+      const result = yield* service.queryTasks({});
       assert.strictEqual(result.total, 1000);
       assert.strictEqual(result.tasks.length, 10);
       assert.strictEqual(result.page, 1);
@@ -270,7 +264,6 @@ it.layer(NodeServices.layer)("ProjectTaskService", (it) => {
       assert.deepStrictEqual(result.tasks[0]?.assignees, []);
 
       const lastPage = yield* service.queryTasks({
-        projectId,
         filter: { page: 20, pageSize: 50 },
       });
       assert.strictEqual(lastPage.total, 1000);
@@ -278,7 +271,6 @@ it.layer(NodeServices.layer)("ProjectTaskService", (it) => {
       assert.strictEqual(lastPage.page, 20);
 
       const clamped = yield* service.queryTasks({
-        projectId,
         filter: { page: 99, pageSize: 50 },
       });
       assert.strictEqual(clamped.page, 20);
@@ -295,30 +287,26 @@ it.layer(NodeServices.layer)("ProjectTaskService", (it) => {
         { title: "D" },
       ]);
 
-      const service = yield* ProjectTaskService;
+      const service = yield* TaskService;
 
       const byList = yield* service.queryTasks({
-        projectId,
         filter: { listIds: ["list-a"] },
       });
       assert.strictEqual(byList.total, 2);
       assert.ok(byList.tasks.every((task) => task.externalListId === "list-a"));
 
       const byStatus = yield* service.queryTasks({
-        projectId,
         filter: { statuses: ["open"] },
       });
       assert.strictEqual(byStatus.total, 3);
 
       const byAssignee = yield* service.queryTasks({
-        projectId,
         filter: { assignees: ["Ana"] },
       });
       assert.strictEqual(byAssignee.total, 1);
       assert.ok(byAssignee.tasks.every((task) => task.assignees.includes("Ana")));
 
       const combined = yield* service.queryTasks({
-        projectId,
         filter: { listIds: ["list-a"], statuses: ["done"] },
       });
       assert.strictEqual(combined.total, 1);
@@ -353,23 +341,20 @@ it.layer(NodeServices.layer)("ProjectTaskService", (it) => {
         { title: "D" },
       ]);
 
-      const service = yield* ProjectTaskService;
+      const service = yield* TaskService;
 
       const byFolder = yield* service.queryTasks({
-        projectId,
         filter: { folderIds: ["folder-ava"] },
       });
       assert.strictEqual(byFolder.total, 2);
       assert.ok(byFolder.tasks.every((task) => task.externalListId !== "list-b"));
 
       const byBothFolders = yield* service.queryTasks({
-        projectId,
         filter: { folderIds: ["folder-ava", "folder-ame"] },
       });
       assert.strictEqual(byBothFolders.total, 3);
 
       const folderOrList = yield* service.queryTasks({
-        projectId,
         filter: { listIds: ["list-b"], folderIds: ["folder-ava"] },
       });
       assert.strictEqual(folderOrList.total, 3);
@@ -380,10 +365,10 @@ it.layer(NodeServices.layer)("ProjectTaskService", (it) => {
 it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the background", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const service = yield* ProjectTaskService;
+    const service = yield* TaskService;
     yield* service.setClickUpToken("pk_test_token");
 
-    const panel = yield* service.syncClickUpTasks({ projectId });
+    const panel = yield* service.syncClickUpTasks();
     assert.strictEqual(panel.clickup.tokenConfigured, true);
 
     // The sync runs in a detached fiber; wait for its rows to land.
@@ -391,8 +376,8 @@ it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the backgro
     for (let attempt = 0; attempt < 200 && !synced; attempt++) {
       const rows = yield* sql<{ readonly c: number }>`
           SELECT COUNT(*) AS "c"
-          FROM project_tasks
-          WHERE project_id = ${projectId} AND external_folder_name = ${"Mobile Squad"}
+          FROM tasks
+          WHERE external_folder_name = ${"Mobile Squad"}
         `;
       if ((rows[0]?.c ?? 0) >= 101) {
         synced = true;
@@ -400,16 +385,15 @@ it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the backgro
       }
       yield* Effect.sleep({ milliseconds: 25 });
     }
-    const panelForDebug = yield* service.getPanel(projectId);
+    const panelForDebug = yield* service.getPanel();
     assert.ok(synced, `detached sync did not write rows in time: ${describePanel(panelForDebug)}`);
 
-    const syncedPanel = yield* service.getPanel(projectId);
+    const syncedPanel = yield* service.getPanel();
     assert.ok(syncedPanel.clickup.lastSyncAt !== null);
     assert.strictEqual(syncedPanel.clickup.lastSyncError, null);
     assert.strictEqual(syncedPanel.clickup.syncConfig?.workspaceId, "4679239");
     assert.deepStrictEqual(syncedPanel.clickup.syncConfig?.listIds, []);
     const byFolder = yield* service.queryTasks({
-      projectId,
       filter: { folderIds: ["folder-mobile-squad"], pageSize: 200 },
     });
     assert.strictEqual(byFolder.total, 101);

@@ -34,17 +34,16 @@ import {
   OrchestrationThreadDetailSnapshot,
 } from "./orchestration.ts";
 import {
-  AddProjectTaskCommentInput,
-  CreateManualProjectTaskInput,
+  AddTaskCommentInput,
+  CreateManualTaskInput,
   ClickUpConnectionStatus,
-  DeleteProjectTaskInput,
-  ProjectTask,
-  ProjectTaskPanel,
-  ProjectTaskQueryResult,
-  QueryProjectTasksInput,
-  SetProjectTaskClickUpTokenInput,
-  SyncProjectClickUpTasksInput,
-  UpdateProjectTaskInput,
+  DeleteTaskInput,
+  Task,
+  TaskPanel,
+  TaskQueryResult,
+  QueryTasksInput,
+  SetClickUpTokenInput,
+  UpdateTaskInput,
 } from "./tasks.ts";
 import {
   RelayCloudEnvironmentHealthRequest,
@@ -578,47 +577,42 @@ export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
-const EnvironmentProjectTaskParams = Schema.Struct({
-  projectId: ProjectId,
-});
-
 export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
   .add(
-    HttpApiEndpoint.get("panel", "/api/tasks/projects/:projectId", {
+    HttpApiEndpoint.get("panel", "/api/tasks/panel", {
       headers: OptionalBearerHeaders,
-      params: EnvironmentProjectTaskParams,
-      success: ProjectTaskPanel,
+      success: TaskPanel,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("queryTasks", "/api/tasks/query", {
       headers: OptionalBearerHeaders,
-      payload: QueryProjectTasksInput,
-      success: ProjectTaskQueryResult,
+      payload: QueryTasksInput,
+      success: TaskQueryResult,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("createManual", "/api/tasks/manual", {
       headers: OptionalBearerHeaders,
-      payload: CreateManualProjectTaskInput,
-      success: ProjectTask,
+      payload: CreateManualTaskInput,
+      success: Task,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("updateTask", "/api/tasks/task", {
       headers: OptionalBearerHeaders,
-      payload: UpdateProjectTaskInput,
-      success: ProjectTask,
+      payload: UpdateTaskInput,
+      success: Task,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("deleteTask", "/api/tasks/delete", {
       headers: OptionalBearerHeaders,
-      payload: DeleteProjectTaskInput,
+      payload: DeleteTaskInput,
       success: Schema.Void,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
@@ -626,15 +620,15 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
   .add(
     HttpApiEndpoint.post("addComment", "/api/tasks/comments", {
       headers: OptionalBearerHeaders,
-      payload: AddProjectTaskCommentInput,
-      success: ProjectTask,
+      payload: AddTaskCommentInput,
+      success: Task,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("setClickUpToken", "/api/tasks/clickup/token", {
       headers: OptionalBearerHeaders,
-      payload: SetProjectTaskClickUpTokenInput,
+      payload: SetClickUpTokenInput,
       success: Schema.Void,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
@@ -656,8 +650,7 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
   .add(
     HttpApiEndpoint.post("syncClickUpTasks", "/api/tasks/clickup/sync", {
       headers: OptionalBearerHeaders,
-      payload: SyncProjectClickUpTasksInput,
-      success: ProjectTaskPanel,
+      success: TaskPanel,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}

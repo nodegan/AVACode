@@ -145,7 +145,7 @@ import {
 } from "../previewMiniPlayerStore";
 import { RightPanelTabs } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
-import { ProjectTasksPanel } from "./tasks/ProjectTasksPanel";
+import { TasksPanel } from "./tasks/TasksPanel";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
@@ -5938,7 +5938,11 @@ function ChatViewContent(props: ChatViewProps) {
         threadId={activeThreadRef?.threadId ?? null}
       />
     ) : activeRightPanelSurface?.kind === "tasks" && activeProject ? (
-      <ProjectTasksPanel project={activeProject} activeThread={activeThread} />
+      <TasksPanel
+        environmentId={activeProject.environmentId}
+        projectId={activeProject.id}
+        activeThread={activeThread}
+      />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (

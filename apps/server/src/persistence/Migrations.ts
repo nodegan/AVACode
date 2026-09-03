@@ -56,6 +56,7 @@ import Migration0040 from "./Migrations/040_ProjectTaskListColumns.ts";
 import Migration0041 from "./Migrations/041_ProjectTaskAssignees.ts";
 import Migration0042 from "./Migrations/042_ProjectTaskListRegistry.ts";
 import Migration0043 from "./Migrations/043_ProjectTaskFolderColumns.ts";
+import Migration0044 from "./Migrations/044_AppWideTasks.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -111,6 +112,7 @@ export const migrationEntries = [
   [41, "ProjectTaskAssignees", Migration0041],
   [42, "ProjectTaskListRegistry", Migration0042],
   [43, "ProjectTaskFolderColumns", Migration0043],
+  [44, "AppWideTasks", Migration0044],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

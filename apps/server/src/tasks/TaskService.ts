@@ -1,25 +1,23 @@
 import {
-  AddProjectTaskCommentInput,
+  AddTaskCommentInput,
   type ClickUpConnectionStatus,
-  CreateManualProjectTaskInput,
+  CreateManualTaskInput,
   type ClickUpWorkspaceSummary,
-  DeleteProjectTaskInput,
-  type ProjectId,
-  type ProjectTask,
-  type ProjectTaskComment,
-  ProjectTaskComment as ProjectTaskCommentSchema,
-  ProjectTaskFacets,
-  ProjectTaskId,
-  type ProjectTaskQueryFilter,
-  type ProjectTaskQueryResult,
-  ProjectTask as ProjectTaskSchema,
-  type ProjectTaskPanel,
-  type ProjectTaskStatusCategory,
-  type ProjectTaskSyncConfig,
-  QueryProjectTasksInput,
-  SyncProjectClickUpTasksInput,
+  DeleteTaskInput,
+  type Task,
+  type TaskComment,
+  TaskComment as TaskCommentSchema,
+  TaskFacets,
+  TaskId,
+  type TaskQueryFilter,
+  type TaskQueryResult,
+  Task as TaskSchema,
+  type TaskPanel,
+  type TaskStatusCategory,
+  type TaskSyncConfig,
+  QueryTasksInput,
   type ThreadId,
-  UpdateProjectTaskInput,
+  UpdateTaskInput,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -41,14 +39,13 @@ const TASK_PAGE_SIZE_MAX = 200;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-interface ProjectTaskRow {
+interface TaskRow {
   readonly id: string;
-  readonly projectId: string;
-  readonly source: ProjectTask["source"];
+  readonly source: Task["source"];
   readonly title: string;
   readonly description: string;
   readonly statusLabel: string;
-  readonly statusCategory: ProjectTaskStatusCategory;
+  readonly statusCategory: TaskStatusCategory;
   readonly linkedThreadId: string | null;
   readonly externalTaskId: string | null;
   readonly externalUrl: string | null;
@@ -63,7 +60,7 @@ interface ProjectTaskRow {
   readonly updatedAt: string;
 }
 
-interface ProjectTaskCommentRow {
+interface TaskCommentRow {
   readonly id: string;
   readonly taskId: string;
   readonly body: string;
@@ -71,8 +68,7 @@ interface ProjectTaskCommentRow {
   readonly updatedAt: string;
 }
 
-interface ProjectTaskSyncConfigRow {
-  readonly projectId: string;
+interface TaskSyncConfigRow {
   readonly workspaceId: string;
   readonly workspaceName: string | null;
   readonly listIdsJson: string;
@@ -83,7 +79,7 @@ interface ProjectTaskSyncConfigRow {
 interface NormalizedTaskQueryFilter {
   readonly listIds: ReadonlyArray<string>;
   readonly folderIds: ReadonlyArray<string>;
-  readonly statuses: ReadonlyArray<ProjectTaskStatusCategory>;
+  readonly statuses: ReadonlyArray<TaskStatusCategory>;
   readonly assignees: ReadonlyArray<string>;
   readonly page: number;
   readonly pageSize: number;
@@ -129,8 +125,8 @@ interface ClickUpTaskListResponse {
   readonly last_page?: boolean;
 }
 
-export class ProjectTaskServiceError extends Schema.TaggedErrorClass<ProjectTaskServiceError>()(
-  "ProjectTaskServiceError",
+export class TaskServiceError extends Schema.TaggedErrorClass<TaskServiceError>()(
+  "TaskServiceError",
   {
     operation: Schema.String,
     detail: Schema.String,
@@ -141,16 +137,16 @@ export class ProjectTaskServiceError extends Schema.TaggedErrorClass<ProjectTask
     return `${this.operation}: ${this.detail}`;
   }
 }
-const isProjectTaskServiceError = Schema.is(ProjectTaskServiceError);
+const isTaskServiceError = Schema.is(TaskServiceError);
 
 const taskServiceError = (operation: string, detail: string, cause?: unknown) =>
-  new ProjectTaskServiceError({
+  new TaskServiceError({
     operation,
     detail,
     ...(cause === undefined ? {} : { cause }),
   });
 
-type ProjectTaskServiceFailure = ProjectTaskServiceError;
+type TaskServiceFailure = TaskServiceError;
 
 function bytesToString(bytes: Uint8Array): string {
   return textDecoder.decode(bytes);
@@ -179,7 +175,7 @@ function stringifyJsonArray(value: ReadonlyArray<string>): string {
 export function taskStatusCategory(input: {
   statusType?: string | null;
   statusLabel?: string | null;
-}): ProjectTaskStatusCategory {
+}): TaskStatusCategory {
   const type = input.statusType?.toLowerCase() ?? "";
   const label = input.statusLabel?.toLowerCase() ?? "";
   if (
@@ -283,11 +279,11 @@ export function clickUpFolderRef(task: ClickUpTaskResponse): {
   return { externalFolderId: id, externalFolderName: name };
 }
 
-const decodeCommentRow = Schema.decodeSync(ProjectTaskCommentSchema);
-const decodeTaskRow = Schema.decodeSync(ProjectTaskSchema);
-const decodeFacets = Schema.decodeSync(ProjectTaskFacets);
+const decodeCommentRow = Schema.decodeSync(TaskCommentSchema);
+const decodeTaskRow = Schema.decodeSync(TaskSchema);
+const decodeFacets = Schema.decodeSync(TaskFacets);
 
-function mapCommentRow(row: ProjectTaskCommentRow): ProjectTaskComment {
+function mapCommentRow(row: TaskCommentRow): TaskComment {
   return decodeCommentRow({
     id: row.id,
     taskId: row.taskId,
@@ -297,10 +293,9 @@ function mapCommentRow(row: ProjectTaskCommentRow): ProjectTaskComment {
   });
 }
 
-function mapTaskRow(row: ProjectTaskRow, comments: ReadonlyArray<ProjectTaskComment>): ProjectTask {
+function mapTaskRow(row: TaskRow, comments: ReadonlyArray<TaskComment>): Task {
   return decodeTaskRow({
     id: row.id,
-    projectId: row.projectId,
     source: row.source,
     title: row.title,
     description: row.description,
@@ -320,38 +315,25 @@ function mapTaskRow(row: ProjectTaskRow, comments: ReadonlyArray<ProjectTaskComm
   });
 }
 
-export class ProjectTaskService extends Context.Service<
-  ProjectTaskService,
+export class TaskService extends Context.Service<
+  TaskService,
   {
-    readonly getPanel: (
-      projectId: ProjectId,
-    ) => Effect.Effect<ProjectTaskPanel, ProjectTaskServiceFailure>;
+    readonly getPanel: () => Effect.Effect<TaskPanel, TaskServiceFailure>;
     readonly queryTasks: (
-      input: QueryProjectTasksInput,
-    ) => Effect.Effect<ProjectTaskQueryResult, ProjectTaskServiceFailure>;
+      input: QueryTasksInput,
+    ) => Effect.Effect<TaskQueryResult, TaskServiceFailure>;
     readonly createManualTask: (
-      input: CreateManualProjectTaskInput,
-    ) => Effect.Effect<ProjectTask, ProjectTaskServiceFailure>;
-    readonly updateTask: (
-      input: UpdateProjectTaskInput,
-    ) => Effect.Effect<ProjectTask, ProjectTaskServiceFailure>;
-    readonly deleteTask: (
-      input: DeleteProjectTaskInput,
-    ) => Effect.Effect<void, ProjectTaskServiceFailure>;
-    readonly addComment: (
-      input: AddProjectTaskCommentInput,
-    ) => Effect.Effect<ProjectTask, ProjectTaskServiceFailure>;
-    readonly setClickUpToken: (token: string) => Effect.Effect<void, ProjectTaskServiceFailure>;
-    readonly clearClickUpToken: () => Effect.Effect<void, ProjectTaskServiceFailure>;
-    readonly getClickUpStatus: () => Effect.Effect<
-      ClickUpConnectionStatus,
-      ProjectTaskServiceFailure
-    >;
-    readonly syncClickUpTasks: (
-      input: SyncProjectClickUpTasksInput,
-    ) => Effect.Effect<ProjectTaskPanel, ProjectTaskServiceFailure>;
+      input: CreateManualTaskInput,
+    ) => Effect.Effect<Task, TaskServiceFailure>;
+    readonly updateTask: (input: UpdateTaskInput) => Effect.Effect<Task, TaskServiceFailure>;
+    readonly deleteTask: (input: DeleteTaskInput) => Effect.Effect<void, TaskServiceFailure>;
+    readonly addComment: (input: AddTaskCommentInput) => Effect.Effect<Task, TaskServiceFailure>;
+    readonly setClickUpToken: (token: string) => Effect.Effect<void, TaskServiceFailure>;
+    readonly clearClickUpToken: () => Effect.Effect<void, TaskServiceFailure>;
+    readonly getClickUpStatus: () => Effect.Effect<ClickUpConnectionStatus, TaskServiceFailure>;
+    readonly syncClickUpTasks: () => Effect.Effect<TaskPanel, TaskServiceFailure>;
   }
->()("t3/tasks/ProjectTaskService") {}
+>()("t3/tasks/TaskService") {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -429,7 +411,7 @@ const make = Effect.gen(function* () {
 
   const fetchClickUpTasks = (input: {
     readonly token: string;
-    readonly syncConfig: ProjectTaskSyncConfig;
+    readonly syncConfig: TaskSyncConfig;
   }) =>
     Effect.gen(function* () {
       const tasks: ClickUpTaskResponse[] = [];
@@ -457,20 +439,19 @@ const make = Effect.gen(function* () {
       return tasks;
     });
 
-  const loadSyncConfigRow = (projectId: ProjectId) =>
-    sql<ProjectTaskSyncConfigRow>`
+  const loadSyncConfigRow = () =>
+    sql<TaskSyncConfigRow>`
       SELECT
-        project_id AS "projectId",
         workspace_id AS "workspaceId",
         workspace_name AS "workspaceName",
         list_ids_json AS "listIdsJson",
         last_sync_at AS "lastSyncAt",
         last_sync_error AS "lastSyncError"
-      FROM project_task_sync_configs
-      WHERE project_id = ${projectId}
+      FROM task_sync_config
+      WHERE id = 1
     `.pipe(Effect.map((rows) => rows[0] ?? null));
 
-  const mapSyncConfig = (row: ProjectTaskSyncConfigRow | null): ProjectTaskSyncConfig | null =>
+  const mapSyncConfig = (row: TaskSyncConfigRow | null): TaskSyncConfig | null =>
     row
       ? {
           workspaceId: row.workspaceId,
@@ -479,9 +460,7 @@ const make = Effect.gen(function* () {
         }
       : null;
 
-  const normalizeQueryFilter = (
-    filter: ProjectTaskQueryFilter | undefined,
-  ): NormalizedTaskQueryFilter => {
+  const normalizeQueryFilter = (filter: TaskQueryFilter | undefined): NormalizedTaskQueryFilter => {
     const dedupe = (values: ReadonlyArray<string>): Array<string> => [
       ...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)),
     ];
@@ -498,8 +477,8 @@ const make = Effect.gen(function* () {
     };
   };
 
-  const taskFilterFragment = (projectId: ProjectId, filter: NormalizedTaskQueryFilter) => {
-    const clauses: Array<string | Fragment> = [sql`project_id = ${projectId}`];
+  const taskFilterFragment = (filter: NormalizedTaskQueryFilter) => {
+    const clauses: Array<string | Fragment> = [];
     // A selection can name lists directly, folders (denormalized onto each
     // synced task), or both — tasks match any of the named scopes.
     const listScope: Array<Fragment> = [];
@@ -520,7 +499,7 @@ const make = Effect.gen(function* () {
     if (filter.assignees.length > 0) {
       clauses.push(
         sql`EXISTS (
-          SELECT 1 FROM json_each(project_tasks.assignees_json) AS assignee
+          SELECT 1 FROM json_each(tasks.assignees_json) AS assignee
           WHERE ${sql.in("assignee.value", filter.assignees)}
         )`,
       );
@@ -531,15 +510,14 @@ const make = Effect.gen(function* () {
   const countFilteredTasks = (where: Fragment) =>
     sql<{ readonly count: number }>`
       SELECT COUNT(*) AS "count"
-      FROM project_tasks
+      FROM tasks
       WHERE ${where}
     `.pipe(Effect.map((rows) => rows[0]?.count ?? 0));
 
   const listFilteredTasks = (where: Fragment, page: number, pageSize: number) =>
-    sql<ProjectTaskRow>`
+    sql<TaskRow>`
       SELECT
         task_id AS "id",
-        project_id AS "projectId",
         source,
         title,
         description,
@@ -557,7 +535,7 @@ const make = Effect.gen(function* () {
         external_updated_at AS "externalUpdatedAt",
         created_at AS "createdAt",
         updated_at AS "updatedAt"
-      FROM project_tasks
+      FROM tasks
       WHERE ${where}
       ORDER BY
         CASE status_category
@@ -571,20 +549,20 @@ const make = Effect.gen(function* () {
 
   const listCommentsByTaskIds = (taskIds: ReadonlyArray<string>) =>
     taskIds.length === 0
-      ? Effect.succeed([] as ProjectTaskCommentRow[])
-      : sql<ProjectTaskCommentRow>`
+      ? Effect.succeed([] as TaskCommentRow[])
+      : sql<TaskCommentRow>`
           SELECT
             comment_id AS "id",
             task_id AS "taskId",
             body,
             created_at AS "createdAt",
             updated_at AS "updatedAt"
-          FROM project_task_comments
+          FROM task_comments
           WHERE ${sql.in("task_id", taskIds)}
           ORDER BY created_at ASC, comment_id ASC
         `;
 
-  const loadTaskFacets = (projectId: ProjectId) =>
+  const loadTaskFacets = () =>
     Effect.gen(function* () {
       const [listRows, statusRows, assigneeRows] = yield* Effect.all([
         sql<{
@@ -600,24 +578,21 @@ const make = Effect.gen(function* () {
             MAX(external_folder_id) AS "folderId",
             MAX(external_folder_name) AS "folderName",
             COUNT(*) AS "count"
-          FROM project_tasks
-          WHERE project_id = ${projectId}
-            AND source = ${"clickup"}
+          FROM tasks
+          WHERE source = ${"clickup"}
             AND external_list_id IS NOT NULL
           GROUP BY external_list_id
           ORDER BY "name" ASC
         `,
         sql<{ readonly value: string; readonly count: number }>`
           SELECT status_category AS "value", COUNT(*) AS "count"
-          FROM project_tasks
-          WHERE project_id = ${projectId}
+          FROM tasks
           GROUP BY status_category
           ORDER BY "count" DESC
         `,
         sql<{ readonly value: string; readonly count: number }>`
           SELECT assignee.value AS "value", COUNT(*) AS "count"
-          FROM project_tasks AS task, json_each(task.assignees_json) AS assignee
-          WHERE task.project_id = ${projectId}
+          FROM tasks AS task, json_each(task.assignees_json) AS assignee
           GROUP BY assignee.value
           ORDER BY "count" DESC, assignee.value ASC
         `,
@@ -644,12 +619,11 @@ const make = Effect.gen(function* () {
       });
     });
 
-  const loadTaskRowById = (taskId: ProjectTaskId) =>
+  const loadTaskRowById = (taskId: TaskId) =>
     Effect.gen(function* () {
-      const rows = yield* sql<ProjectTaskRow>`
+      const rows = yield* sql<TaskRow>`
         SELECT
           task_id AS "id",
-          project_id AS "projectId",
           source,
           title,
           description,
@@ -667,7 +641,7 @@ const make = Effect.gen(function* () {
           external_updated_at AS "externalUpdatedAt",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
-        FROM project_tasks
+        FROM tasks
         WHERE task_id = ${taskId}
       `;
       const row = rows[0];
@@ -677,7 +651,7 @@ const make = Effect.gen(function* () {
       return row;
     });
 
-  const loadTaskById = (taskId: ProjectTaskId) =>
+  const loadTaskById = (taskId: TaskId) =>
     Effect.gen(function* () {
       const row = yield* loadTaskRowById(taskId);
       const commentRows = yield* listCommentsByTaskIds([taskId]);
@@ -685,11 +659,10 @@ const make = Effect.gen(function* () {
       return mapTaskRow(row, comments);
     });
 
-  const upsertTaskRow = (row: ProjectTaskRow) =>
+  const upsertTaskRow = (row: TaskRow) =>
     sql`
-      INSERT INTO project_tasks (
+      INSERT INTO tasks (
         task_id,
-        project_id,
         source,
         title,
         description,
@@ -710,7 +683,6 @@ const make = Effect.gen(function* () {
       )
       VALUES (
         ${row.id},
-        ${row.projectId},
         ${row.source},
         ${row.title},
         ${row.description},
@@ -749,14 +721,13 @@ const make = Effect.gen(function* () {
     `.pipe(Effect.asVoid);
 
   const upsertSyncConfigRow = (input: {
-    readonly projectId: string;
-    readonly syncConfig: ProjectTaskSyncConfig;
+    readonly syncConfig: TaskSyncConfig;
     readonly lastSyncAt?: string | null;
     readonly lastSyncError?: string | null;
   }) =>
     sql`
-      INSERT INTO project_task_sync_configs (
-        project_id,
+      INSERT INTO task_sync_config (
+        id,
         provider,
         workspace_id,
         workspace_name,
@@ -765,7 +736,7 @@ const make = Effect.gen(function* () {
         last_sync_error
       )
       VALUES (
-        ${input.projectId},
+        1,
         ${CLICKUP_SYNC_PROVIDER},
         ${input.syncConfig.workspaceId},
         ${input.syncConfig.workspaceName ?? null},
@@ -773,7 +744,7 @@ const make = Effect.gen(function* () {
         ${input.lastSyncAt ?? null},
         ${input.lastSyncError ?? null}
       )
-      ON CONFLICT (project_id)
+      ON CONFLICT (id)
       DO UPDATE SET
         provider = excluded.provider,
         workspace_id = excluded.workspace_id,
@@ -783,18 +754,17 @@ const make = Effect.gen(function* () {
         last_sync_error = excluded.last_sync_error
     `.pipe(Effect.asVoid);
 
-  const getPanel: ProjectTaskService["Service"]["getPanel"] = (projectId) =>
+  const getPanel: TaskService["Service"]["getPanel"] = () =>
     Effect.gen(function* () {
       const [facets, syncRow, token] = yield* Effect.all([
-        loadTaskFacets(projectId),
-        loadSyncConfigRow(projectId),
+        loadTaskFacets(),
+        loadSyncConfigRow(),
         getClickUpToken,
       ]);
       const workspaces = token
         ? yield* fetchClickUpWorkspaces(token).pipe(Effect.orElseSucceed(() => []))
         : [];
       return {
-        projectId,
         clickup: {
           tokenConfigured: token !== null,
           availableWorkspaces: workspaces,
@@ -803,17 +773,17 @@ const make = Effect.gen(function* () {
           lastSyncError: syncRow?.lastSyncError ?? null,
         },
         facets,
-      } satisfies ProjectTaskPanel;
+      } satisfies TaskPanel;
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError("tasks.getPanel", "Failed to load task panel", cause),
       ),
     );
 
-  const queryTasks: ProjectTaskService["Service"]["queryTasks"] = (input) =>
+  const queryTasks: TaskService["Service"]["queryTasks"] = (input) =>
     Effect.gen(function* () {
       const filter = normalizeQueryFilter(input.filter);
-      const where = taskFilterFragment(input.projectId, filter);
+      const where = taskFilterFragment(filter);
       const total = yield* countFilteredTasks(where);
       // Clamp the requested page against the filtered total so an out-of-range
       // page (e.g. after deletions) still renders the last available page.
@@ -821,7 +791,7 @@ const make = Effect.gen(function* () {
       const page = Math.min(filter.page, totalPages);
       const taskRows = yield* listFilteredTasks(where, page, filter.pageSize);
       const commentRows = yield* listCommentsByTaskIds(taskRows.map((task) => task.id));
-      const commentsByTaskId = new Map<string, ProjectTaskComment[]>();
+      const commentsByTaskId = new Map<string, TaskComment[]>();
       for (const comment of commentRows) {
         const entry = commentsByTaskId.get(comment.taskId) ?? [];
         entry.push(mapCommentRow(comment));
@@ -832,20 +802,19 @@ const make = Effect.gen(function* () {
         total,
         page,
         pageSize: filter.pageSize,
-      } satisfies ProjectTaskQueryResult;
+      } satisfies TaskQueryResult;
     }).pipe(
       Effect.mapError((cause) =>
-        taskServiceError("tasks.queryTasks", "Failed to query project tasks", cause),
+        taskServiceError("tasks.queryTasks", "Failed to query tasks", cause),
       ),
     );
 
-  const createManualTask: ProjectTaskService["Service"]["createManualTask"] = (input) =>
+  const createManualTask: TaskService["Service"]["createManualTask"] = (input) =>
     Effect.gen(function* () {
       const createdAt = yield* nowIso();
       const id = yield* crypto.randomUUIDv4;
-      const row: ProjectTaskRow = {
+      const row: TaskRow = {
         id,
-        projectId: input.projectId,
         source: "manual",
         title: input.title,
         description: input.description?.trim() ?? "",
@@ -865,20 +834,19 @@ const make = Effect.gen(function* () {
         updatedAt: createdAt,
       };
       yield* upsertTaskRow(row);
-      return yield* loadTaskById(ProjectTaskId.make(id));
+      return yield* loadTaskById(TaskId.make(id));
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError("tasks.createManualTask", "Failed to create manual task", cause),
       ),
     );
 
-  const updateTask: ProjectTaskService["Service"]["updateTask"] = (input) =>
+  const updateTask: TaskService["Service"]["updateTask"] = (input) =>
     Effect.gen(function* () {
       const current = yield* loadTaskRowById(input.taskId);
       const updatedAt = yield* nowIso();
       yield* upsertTaskRow({
         id: current.id,
-        projectId: current.projectId,
         source: current.source,
         title: input.title ?? current.title,
         description: input.description ?? current.description,
@@ -905,18 +873,18 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const deleteTask: ProjectTaskService["Service"]["deleteTask"] = (input) =>
+  const deleteTask: TaskService["Service"]["deleteTask"] = (input) =>
     Effect.gen(function* () {
       const current = yield* loadTaskById(input.taskId);
       if (current.source !== "manual") {
         return yield* taskServiceError("tasks.deleteTask", "Only manual tasks can be deleted.");
       }
       yield* sql`
-        DELETE FROM project_task_comments
+        DELETE FROM task_comments
         WHERE task_id = ${input.taskId}
       `;
       yield* sql`
-        DELETE FROM project_tasks
+        DELETE FROM tasks
         WHERE task_id = ${input.taskId}
       `;
     }).pipe(
@@ -925,13 +893,13 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const addComment: ProjectTaskService["Service"]["addComment"] = (input) =>
+  const addComment: TaskService["Service"]["addComment"] = (input) =>
     Effect.gen(function* () {
       const task = yield* loadTaskById(input.taskId);
       const timestamp = yield* nowIso();
       const commentId = yield* crypto.randomUUIDv4;
       yield* sql`
-        INSERT INTO project_task_comments (
+        INSERT INTO task_comments (
           comment_id,
           task_id,
           body,
@@ -947,7 +915,7 @@ const make = Effect.gen(function* () {
         )
       `;
       yield* sql`
-        UPDATE project_tasks
+        UPDATE tasks
         SET updated_at = ${timestamp}
         WHERE task_id = ${task.id}
       `;
@@ -958,7 +926,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const setClickUpToken: ProjectTaskService["Service"]["setClickUpToken"] = (token) => {
+  const setClickUpToken: TaskService["Service"]["setClickUpToken"] = (token) => {
     const normalized = normalizeClickUpToken(token);
     if (normalized.length === 0) {
       return Effect.fail(
@@ -977,7 +945,7 @@ const make = Effect.gen(function* () {
       );
   };
 
-  const clearClickUpToken: ProjectTaskService["Service"]["clearClickUpToken"] = () =>
+  const clearClickUpToken: TaskService["Service"]["clearClickUpToken"] = () =>
     secretStore.get(CLICKUP_TOKEN_SECRET).pipe(
       Effect.flatMap(
         Option.match({
@@ -990,7 +958,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const getClickUpStatus: ProjectTaskService["Service"]["getClickUpStatus"] = () =>
+  const getClickUpStatus: TaskService["Service"]["getClickUpStatus"] = () =>
     Effect.gen(function* () {
       const token = yield* getClickUpToken;
       return { tokenConfigured: token !== null };
@@ -1001,10 +969,9 @@ const make = Effect.gen(function* () {
     );
 
   const runClickUpSync = (input: {
-    readonly projectId: ProjectId;
     readonly token: string;
-    readonly syncConfig: ProjectTaskSyncConfig;
-    readonly syncRow: ProjectTaskSyncConfigRow | null;
+    readonly syncConfig: TaskSyncConfig;
+    readonly syncRow: TaskSyncConfigRow | null;
   }) =>
     Effect.gen(function* () {
       const syncedAt = yield* nowIso();
@@ -1014,13 +981,11 @@ const make = Effect.gen(function* () {
       if (result._tag === "Failure") {
         const failure = result.failure;
         yield* upsertSyncConfigRow({
-          projectId: input.projectId,
           syncConfig: input.syncConfig,
           lastSyncAt: input.syncRow?.lastSyncAt ?? null,
           lastSyncError: failure instanceof Error ? failure.message : String(failure),
         });
         yield* Effect.logWarning("ClickUp sync failed", {
-          projectId: input.projectId,
           cause: failure,
         });
         return;
@@ -1043,17 +1008,15 @@ const make = Effect.gen(function* () {
             task_id AS "id",
             created_at AS "createdAt",
             linked_thread_id AS "linkedThreadId"
-          FROM project_tasks
-          WHERE project_id = ${input.projectId}
-            AND source = ${"clickup"}
+          FROM tasks
+          WHERE source = ${"clickup"}
             AND external_task_id = ${externalTaskId}
           LIMIT 1
         `;
         const existing = existingRows[0] ?? null;
-        const taskId = existing?.id ?? ProjectTaskId.make(yield* crypto.randomUUIDv4);
+        const taskId = existing?.id ?? TaskId.make(yield* crypto.randomUUIDv4);
         yield* upsertTaskRow({
           id: taskId,
-          projectId: input.projectId,
           source: "clickup",
           title,
           description: pickClickUpDescription(task),
@@ -1078,18 +1041,16 @@ const make = Effect.gen(function* () {
       }
 
       yield* upsertSyncConfigRow({
-        projectId: input.projectId,
         syncConfig: input.syncConfig,
         lastSyncAt: syncedAt,
         lastSyncError: null,
       });
       yield* Effect.logInfo("ClickUp sync completed", {
-        projectId: input.projectId,
         tasks: result.success.length,
       });
     });
 
-  const syncClickUpTasks: ProjectTaskService["Service"]["syncClickUpTasks"] = (input) =>
+  const syncClickUpTasks: TaskService["Service"]["syncClickUpTasks"] = () =>
     Effect.gen(function* () {
       const token = yield* getClickUpToken;
       if (!token) {
@@ -1098,11 +1059,11 @@ const make = Effect.gen(function* () {
           "Configure a ClickUp token before syncing tasks.",
         );
       }
-      let syncRow = yield* loadSyncConfigRow(input.projectId);
+      let syncRow = yield* loadSyncConfigRow();
       let syncConfig = mapSyncConfig(syncRow);
       if (!syncConfig) {
-        // Whole-workspace default: a project that never configured ClickUp
-        // syncs every task of the token's first workspace.
+        // Whole-workspace default: an environment that never configured
+        // ClickUp syncs every task of the token's first workspace.
         const workspaces = yield* fetchClickUpWorkspaces(token).pipe(
           Effect.orElseSucceed(() => []),
         );
@@ -1115,12 +1076,11 @@ const make = Effect.gen(function* () {
         }
         syncConfig = { workspaceId: workspace.id, workspaceName: workspace.name, listIds: [] };
         yield* upsertSyncConfigRow({
-          projectId: input.projectId,
           syncConfig,
           lastSyncAt: null,
           lastSyncError: null,
         });
-        syncRow = yield* loadSyncConfigRow(input.projectId);
+        syncRow = yield* loadSyncConfigRow();
       }
 
       // Sync runs in a detached fiber: ClickUp paging plus row writes take
@@ -1128,31 +1088,29 @@ const make = Effect.gen(function* () {
       // timeout. Clients poll the panel for lastSyncAt/lastSyncError instead.
       yield* Effect.forkDetach(
         runClickUpSync({
-          projectId: input.projectId,
           token,
           syncConfig,
           syncRow,
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("ClickUp sync crashed", {
-              projectId: input.projectId,
               cause,
             }),
           ),
         ),
       );
-      return yield* getPanel(input.projectId);
+      return yield* getPanel();
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError(
           "tasks.syncClickUpTasks",
-          isProjectTaskServiceError(cause) ? cause.message : "Failed to start ClickUp sync",
+          isTaskServiceError(cause) ? cause.message : "Failed to start ClickUp sync",
           cause,
         ),
       ),
     );
 
-  return ProjectTaskService.of({
+  return TaskService.of({
     getPanel,
     queryTasks,
     createManualTask,
@@ -1166,4 +1124,4 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const ProjectTaskServiceLive = Layer.effect(ProjectTaskService, make);
+export const TaskServiceLive = Layer.effect(TaskService, make);

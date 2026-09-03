@@ -11,13 +11,13 @@ import {
   failEnvironmentInternal,
   requireEnvironmentScope,
 } from "../auth/http.ts";
-import { ProjectTaskService } from "./ProjectTaskService.ts";
+import { TaskService } from "./TaskService.ts";
 
 export const tasksHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "tasks",
   Effect.fnUntraced(function* (handlers) {
-    const tasks = yield* ProjectTaskService;
+    const tasks = yield* TaskService;
 
     return handlers
       .handle(
@@ -26,7 +26,7 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* tasks
-            .getPanel(args.params.projectId)
+            .getPanel()
             .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_panel_failed", cause)));
         }),
       )
@@ -116,7 +116,7 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
           return yield* tasks
-            .syncClickUpTasks(args.payload)
+            .syncClickUpTasks()
             .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
         }),
       );

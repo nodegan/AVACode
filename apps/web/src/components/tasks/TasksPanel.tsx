@@ -5,27 +5,26 @@ import {
 import { type PreparedConnection } from "@t3tools/client-runtime/connection";
 import { environmentEndpointUrl } from "@t3tools/client-runtime/environment";
 import { ManagedRelay } from "@t3tools/client-runtime/relay";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type {
-  EnvironmentProject,
-  EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/shell";
-import type {
-  ProjectTask,
-  ProjectTaskId,
-  ProjectTaskListFacet,
-  ProjectTaskPanel,
-  ProjectTaskQueryFilter,
-  ProjectTaskQueryResult,
-  ProjectTaskStatusCategory,
+  Task,
+  TaskId,
+  TaskListFacet,
+  TaskPanel,
+  TaskQueryFilter,
+  TaskQueryResult,
+  TaskStatusCategory,
 } from "@t3tools/contracts";
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { FetchHttpClient, type HttpMethod } from "effect/unstable/http";
 import {
   ArrowLeftIcon,
+  CalendarIcon,
   ChevronRightIcon,
+  ExternalLinkIcon,
   FolderIcon,
   FolderOpenIcon,
   Link2Icon,
@@ -34,6 +33,7 @@ import {
   MessageSquareIcon,
   RefreshCwIcon,
   SquareCheckBigIcon,
+  UserIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -134,17 +134,10 @@ async function runTasksRequest<A, E>(
   );
 }
 
-async function fetchProjectTaskPanel(
-  prepared: PreparedConnection,
-  projectId: ProjectId,
-): Promise<ProjectTaskPanel> {
-  const requestUrl = environmentEndpointUrl(
-    prepared.httpBaseUrl,
-    `/api/tasks/projects/${projectId}`,
-  );
+async function fetchTaskPanel(prepared: PreparedConnection): Promise<TaskPanel> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/panel");
   return runTasksRequest(prepared, requestUrl, "GET", (client, headers) =>
     client.tasks.panel({
-      params: { projectId },
       headers,
     }),
   );
@@ -152,16 +145,15 @@ async function fetchProjectTaskPanel(
 
 const TASKS_PAGE_SIZE = 10;
 
-async function fetchProjectTasksQuery(
+async function fetchTasksQuery(
   prepared: PreparedConnection,
-  projectId: ProjectId,
-  filter: ProjectTaskQueryFilter,
-): Promise<ProjectTaskQueryResult> {
+  filter: TaskQueryFilter,
+): Promise<TaskQueryResult> {
   const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/query");
   return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
     client.tasks.queryTasks({
       headers,
-      payload: { projectId, filter },
+      payload: { filter },
     }),
   );
 }
@@ -172,10 +164,10 @@ interface TaskFolderGroup {
   id: string;
   name: string;
   count: number;
-  lists: ProjectTaskListFacet[];
+  lists: TaskListFacet[];
 }
 
-const statusCategoryLabels: Record<ProjectTaskStatusCategory, string> = {
+const statusCategoryLabels: Record<TaskStatusCategory, string> = {
   open: "Open",
   in_progress: "In progress",
   done: "Done",
@@ -183,7 +175,7 @@ const statusCategoryLabels: Record<ProjectTaskStatusCategory, string> = {
   unknown: "Unknown",
 };
 
-function formatTaskStatusLabel(task: ProjectTask): string {
+function formatTaskStatusLabel(task: Task): string {
   switch (task.statusCategory) {
     case "done":
       return "Done";
@@ -198,7 +190,7 @@ function formatTaskStatusLabel(task: ProjectTask): string {
   }
 }
 
-function statusTone(status: ProjectTaskStatusCategory): string {
+function statusTone(status: TaskStatusCategory): string {
   switch (status) {
     case "done":
       return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
@@ -213,7 +205,7 @@ function statusTone(status: ProjectTaskStatusCategory): string {
   }
 }
 
-function TaskStatusBadge({ task }: { task: ProjectTask }) {
+function TaskStatusBadge({ task }: { task: Task }) {
   return (
     <span
       className={cn(
@@ -227,7 +219,7 @@ function TaskStatusBadge({ task }: { task: ProjectTask }) {
 }
 
 interface TaskCardProps {
-  task: ProjectTask;
+  task: Task;
   environmentId: string;
   activeThreadId: ThreadId;
   busyKey: string | null;
@@ -235,10 +227,10 @@ interface TaskCardProps {
   commentsOpen: boolean;
   onCommentDraftChange: (taskId: string, value: string) => void;
   onToggleComments: (taskId: string) => void;
-  onAddComment: (taskId: ProjectTaskId) => void;
-  onDelete: (taskId: ProjectTaskId) => void;
-  onLink: (taskId: ProjectTaskId, threadId: ThreadId) => void;
-  onCreateThread: (task: ProjectTask) => void;
+  onAddComment: (taskId: TaskId) => void;
+  onDelete: (taskId: TaskId) => void;
+  onLink: (taskId: TaskId, threadId: ThreadId) => void;
+  onCreateThread: (task: Task) => void;
   onNavigateThread: (environmentId: string, threadId: ThreadId) => void;
 }
 
@@ -381,8 +373,8 @@ function TaskGroup({
   renderTask,
 }: {
   title: string;
-  tasks: ReadonlyArray<ProjectTask>;
-  renderTask: (task: ProjectTask) => ReactNode;
+  tasks: ReadonlyArray<Task>;
+  renderTask: (task: Task) => ReactNode;
 }) {
   return (
     <section className="space-y-2">
@@ -433,16 +425,17 @@ function NavTreeRow(props: {
   );
 }
 
-export function ProjectTasksPanel(props: {
-  project: EnvironmentProject;
+export function TasksPanel(props: {
+  environmentId: EnvironmentId;
+  projectId: string;
   activeThread: TaskPanelThreadContext;
 }) {
-  const prepared = usePreparedConnection(props.project.environmentId);
+  const prepared = usePreparedConnection(props.environmentId);
   const navigate = useNavigate();
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
-  const projectId = ProjectId.make(props.project.id);
+  const projectId = ProjectId.make(props.projectId);
   const activeThreadId = ThreadId.make(props.activeThread.id);
-  const [panel, setPanel] = useState<ProjectTaskPanel | null>(null);
+  const [panel, setPanel] = useState<TaskPanel | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [manualTitle, setManualTitle] = useState("");
@@ -451,14 +444,14 @@ export function ProjectTasksPanel(props: {
   const [openComments, setOpenComments] = useState<Record<string, boolean>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
-  const [tasksResult, setTasksResult] = useState<ProjectTaskQueryResult | null>(null);
+  const [tasksResult, setTasksResult] = useState<TaskQueryResult | null>(null);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState<string | null>(null);
   const [listSelection, setListSelection] = useState<ListSelection>({ kind: "all" });
   const [view, setView] = useState<"browse" | "tasks">("browse");
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
   const [listSearch, setListSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<ProjectTaskStatusCategory | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<TaskStatusCategory | "all">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
 
@@ -475,15 +468,15 @@ export function ProjectTasksPanel(props: {
     setLoading(true);
     setError(null);
     try {
-      setPanel(await fetchProjectTaskPanel(prepared.value, projectId));
+      setPanel(await fetchTaskPanel(prepared.value));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to load tasks.");
     } finally {
       setLoading(false);
     }
-  }, [prepared, projectId]);
+  }, [prepared]);
 
-  const queryFilter = useMemo<ProjectTaskQueryFilter>(
+  const queryFilter = useMemo<TaskQueryFilter>(
     () => ({
       listIds: listSelection.kind === "list" ? [listSelection.listId] : [],
       statuses: statusFilter === "all" ? [] : [statusFilter],
@@ -503,13 +496,13 @@ export function ProjectTasksPanel(props: {
     setTasksLoading(true);
     setTasksError(null);
     try {
-      setTasksResult(await fetchProjectTasksQuery(prepared.value, projectId, queryFilter));
+      setTasksResult(await fetchTasksQuery(prepared.value, queryFilter));
     } catch (cause) {
       setTasksError(cause instanceof Error ? cause.message : "Failed to load tasks.");
     } finally {
       setTasksLoading(false);
     }
-  }, [prepared, projectId, queryFilter]);
+  }, [prepared, queryFilter]);
 
   useEffect(() => {
     void loadPanel();
@@ -520,10 +513,7 @@ export function ProjectTasksPanel(props: {
   }, [loadTasks]);
 
   const runMutation = useCallback(
-    async (
-      key: string,
-      action: (prepared: PreparedConnection) => Promise<void | ProjectTaskPanel>,
-    ) => {
+    async (key: string, action: (prepared: PreparedConnection) => Promise<void | TaskPanel>) => {
       if (prepared._tag === "None") {
         setError("Waiting for an authenticated environment connection.");
         return;
@@ -563,7 +553,6 @@ export function ProjectTasksPanel(props: {
       await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
         client.tasks.syncClickUpTasks({
           headers,
-          payload: { projectId },
         }),
       );
       const initialLastSyncAt = panel?.clickup.lastSyncAt ?? null;
@@ -572,7 +561,7 @@ export function ProjectTasksPanel(props: {
       for (let attempt = 0; attempt < 60; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
         try {
-          latest = await fetchProjectTaskPanel(connection, projectId);
+          latest = await fetchTaskPanel(connection);
           setPanel(latest);
         } catch {
           // A failed poll is transient; keep waiting for the sync to land.
@@ -589,7 +578,7 @@ export function ProjectTasksPanel(props: {
       }
       return latest ?? undefined;
     });
-  }, [panel, projectId, runMutation]);
+  }, [panel, runMutation]);
 
   const createManual = useCallback(() => {
     const title = manualTitle.trim();
@@ -600,7 +589,6 @@ export function ProjectTasksPanel(props: {
         client.tasks.createManual({
           headers,
           payload: {
-            projectId,
             title,
             ...(manualDescription.trim() ? { description: manualDescription.trim() } : {}),
           },
@@ -609,10 +597,10 @@ export function ProjectTasksPanel(props: {
       setManualTitle("");
       setManualDescription("");
     });
-  }, [manualDescription, manualTitle, projectId, runMutation]);
+  }, [manualDescription, manualTitle, runMutation]);
 
   const setTaskLink = useCallback(
-    (taskId: ProjectTaskId, linkedThreadId: ThreadId) => {
+    (taskId: TaskId, linkedThreadId: ThreadId) => {
       void runMutation(`task-link:${taskId}`, async (connection) => {
         const requestUrl = environmentEndpointUrl(connection.httpBaseUrl, "/api/tasks/task");
         await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
@@ -627,7 +615,7 @@ export function ProjectTasksPanel(props: {
   );
 
   const addComment = useCallback(
-    (taskId: ProjectTaskId) => {
+    (taskId: TaskId) => {
       const body = commentDrafts[taskId]?.trim();
       if (!body) return;
       void runMutation(`comment:${taskId}`, async (connection) => {
@@ -645,7 +633,7 @@ export function ProjectTasksPanel(props: {
   );
 
   const deleteTask = useCallback(
-    (taskId: ProjectTaskId) => {
+    (taskId: TaskId) => {
       void runMutation(`task-delete:${taskId}`, async (connection) => {
         const requestUrl = environmentEndpointUrl(connection.httpBaseUrl, "/api/tasks/delete");
         await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
@@ -660,10 +648,10 @@ export function ProjectTasksPanel(props: {
   );
 
   const createLinkedThread = useCallback(
-    async (task: ProjectTask) => {
+    async (task: Task) => {
       const threadId = newThreadId();
       const createResult = await createThread({
-        environmentId: props.project.environmentId,
+        environmentId: props.environmentId,
         input: {
           threadId,
           projectId,
@@ -683,7 +671,7 @@ export function ProjectTasksPanel(props: {
       void navigate({
         to: "/$environmentId/$threadId",
         params: {
-          environmentId: props.project.environmentId,
+          environmentId: props.environmentId,
           threadId,
         },
       });
@@ -694,7 +682,7 @@ export function ProjectTasksPanel(props: {
       props.activeThread.interactionMode,
       props.activeThread.modelSelection,
       props.activeThread.runtimeMode,
-      props.project.environmentId,
+      props.environmentId,
       projectId,
       setTaskLink,
     ],
@@ -713,7 +701,7 @@ export function ProjectTasksPanel(props: {
   const taskGroups = useMemo(() => {
     const tasks = tasksResult?.tasks ?? [];
     const manual = tasks.filter((task) => task.source === "manual");
-    const byList = new Map<string, ProjectTask[]>();
+    const byList = new Map<string, Task[]>();
     for (const task of tasks) {
       if (task.source !== "clickup") continue;
       const key = task.externalListName ?? "ClickUp";
@@ -741,7 +729,7 @@ export function ProjectTasksPanel(props: {
   // the top level.
   const listTree = useMemo(() => {
     const folders = new Map<string, TaskFolderGroup>();
-    const orphans: ProjectTaskListFacet[] = [];
+    const orphans: TaskListFacet[] = [];
     for (const list of facets?.lists ?? []) {
       if (list.folderId && list.folderName) {
         const folder = folders.get(list.folderId) ?? {
@@ -765,7 +753,7 @@ export function ProjectTasksPanel(props: {
 
   const listSearchQuery = listSearch.trim().toLowerCase();
   const matchesList = useCallback(
-    (list: ProjectTaskListFacet) =>
+    (list: TaskListFacet) =>
       listSearchQuery.length === 0 || list.name.toLowerCase().includes(listSearchQuery),
     [listSearchQuery],
   );
@@ -816,7 +804,7 @@ export function ProjectTasksPanel(props: {
     setView("browse");
   }, []);
 
-  const updateStatusFilter = useCallback((value: ProjectTaskStatusCategory | "all") => {
+  const updateStatusFilter = useCallback((value: TaskStatusCategory | "all") => {
     setStatusFilter(value);
     setPage(1);
   }, []);
@@ -827,7 +815,7 @@ export function ProjectTasksPanel(props: {
   }, []);
 
   const taskCardHandlers = {
-    environmentId: props.project.environmentId,
+    environmentId: props.environmentId,
     activeThreadId,
     busyKey,
     onCommentDraftChange: (taskId: string, value: string) => {
@@ -839,7 +827,7 @@ export function ProjectTasksPanel(props: {
     onAddComment: addComment,
     onDelete: deleteTask,
     onLink: setTaskLink,
-    onCreateThread: (task: ProjectTask) => void createLinkedThread(task),
+    onCreateThread: (task: Task) => void createLinkedThread(task),
     onNavigateThread: navigateToThread,
   } satisfies Omit<TaskCardProps, "task" | "commentDraft" | "commentsOpen">;
 
@@ -858,7 +846,7 @@ export function ProjectTasksPanel(props: {
     </Button>
   );
 
-  const renderTaskCard = (task: ProjectTask) => (
+  const renderTaskCard = (task: Task) => (
     <TaskCard
       key={task.id}
       task={task}
@@ -913,7 +901,7 @@ export function ProjectTasksPanel(props: {
               value={statusFilter}
               onValueChange={(value) => {
                 if (typeof value === "string")
-                  updateStatusFilter(value as ProjectTaskStatusCategory | "all");
+                  updateStatusFilter(value as TaskStatusCategory | "all");
               }}
             >
               <SelectTrigger size="sm" aria-label="Filter by status">
@@ -925,7 +913,7 @@ export function ProjectTasksPanel(props: {
                 <SelectItem value="all">All statuses</SelectItem>
                 {(facets?.statuses ?? []).map((facet) => (
                   <SelectItem key={facet.value} value={facet.value}>
-                    {statusCategoryLabels[facet.value as ProjectTaskStatusCategory] ?? facet.value}
+                    {statusCategoryLabels[facet.value as TaskStatusCategory] ?? facet.value}
                     <span className="ml-1 opacity-60">{facet.count}</span>
                   </SelectItem>
                 ))}
@@ -963,7 +951,7 @@ export function ProjectTasksPanel(props: {
           ) : null}
 
           {taskGroups.manual.length > 0 ? (
-            <TaskGroup title="This project" tasks={taskGroups.manual} renderTask={renderTaskCard} />
+            <TaskGroup title="Manual" tasks={taskGroups.manual} renderTask={renderTaskCard} />
           ) : null}
 
           {taskGroups.clickupGroups.map(([listName, tasks]) => (
