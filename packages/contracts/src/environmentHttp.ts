@@ -24,7 +24,7 @@ import {
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
 } from "./auth.ts";
-import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { AuthSessionId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   ClientOrchestrationCommand,
@@ -33,6 +33,19 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
 } from "./orchestration.ts";
+import {
+  AddProjectTaskCommentInput,
+  CreateManualProjectTaskInput,
+  ClickUpListSummary,
+  DeleteProjectTaskInput,
+  GetProjectTaskClickUpListsInput,
+  ProjectTask,
+  ProjectTaskPanel,
+  SetProjectTaskClickUpSyncConfigInput,
+  SetProjectTaskClickUpTokenInput,
+  SyncProjectClickUpTasksInput,
+  UpdateProjectTaskInput,
+} from "./tasks.ts";
 import {
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,
@@ -84,6 +97,10 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
   "orchestration_dispatch_failed",
+  "tasks_panel_failed",
+  "tasks_upsert_failed",
+  "tasks_comment_failed",
+  "tasks_clickup_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -561,8 +578,94 @@ export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
+const EnvironmentProjectTaskParams = Schema.Struct({
+  projectId: ProjectId,
+});
+
+export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
+  .add(
+    HttpApiEndpoint.get("panel", "/api/tasks/projects/:projectId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentProjectTaskParams,
+      success: ProjectTaskPanel,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createManual", "/api/tasks/manual", {
+      headers: OptionalBearerHeaders,
+      payload: CreateManualProjectTaskInput,
+      success: ProjectTask,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("updateTask", "/api/tasks/task", {
+      headers: OptionalBearerHeaders,
+      payload: UpdateProjectTaskInput,
+      success: ProjectTask,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("deleteTask", "/api/tasks/delete", {
+      headers: OptionalBearerHeaders,
+      payload: DeleteProjectTaskInput,
+      success: Schema.Void,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("addComment", "/api/tasks/comments", {
+      headers: OptionalBearerHeaders,
+      payload: AddProjectTaskCommentInput,
+      success: ProjectTask,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("setClickUpToken", "/api/tasks/clickup/token", {
+      headers: OptionalBearerHeaders,
+      payload: SetProjectTaskClickUpTokenInput,
+      success: Schema.Void,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("clearClickUpToken", "/api/tasks/clickup/token/remove", {
+      headers: OptionalBearerHeaders,
+      success: Schema.Void,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("clickUpLists", "/api/tasks/clickup/lists", {
+      headers: OptionalBearerHeaders,
+      payload: GetProjectTaskClickUpListsInput,
+      success: Schema.Array(ClickUpListSummary),
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("setClickUpSyncConfig", "/api/tasks/clickup/config", {
+      headers: OptionalBearerHeaders,
+      payload: SetProjectTaskClickUpSyncConfigInput,
+      success: ProjectTaskPanel,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("syncClickUpTasks", "/api/tasks/clickup/sync", {
+      headers: OptionalBearerHeaders,
+      payload: SyncProjectClickUpTasksInput,
+      success: ProjectTaskPanel,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentTasksHttpApi)
   .add(EnvironmentConnectHttpApi) {}
