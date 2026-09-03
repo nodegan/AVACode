@@ -1,12 +1,63 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  clickUpAssignees,
+  clickUpFolderRef,
   clickUpListRef,
+  normalizeClickUpToken,
   parseClickUpTimestamp,
   pickClickUpDescription,
   taskStatusCategory,
   type ClickUpTaskResponse,
 } from "../src/tasks/ProjectTaskService.ts";
+
+describe("clickUpFolderRef", () => {
+  it("extracts the folder id and name", () => {
+    expect(
+      clickUpFolderRef({ folder: { id: "6992470", name: "Mobile Squad", hidden: false } }),
+    ).toEqual({ externalFolderId: "6992470", externalFolderName: "Mobile Squad" });
+  });
+
+  it("treats hidden folders (folderless lists) as having no folder", () => {
+    expect(
+      clickUpFolderRef({ folder: { id: "7002367", name: "Engineering", hidden: true } }),
+    ).toEqual({ externalFolderId: null, externalFolderName: null });
+  });
+
+  it("tolerates missing, empty, and unnamed folders", () => {
+    expect(clickUpFolderRef({})).toEqual({ externalFolderId: null, externalFolderName: null });
+    expect(clickUpFolderRef({ folder: null })).toEqual({
+      externalFolderId: null,
+      externalFolderName: null,
+    });
+    expect(clickUpFolderRef({ folder: { id: null, name: "" } })).toEqual({
+      externalFolderId: null,
+      externalFolderName: null,
+    });
+    expect(clickUpFolderRef({ folder: { id: "1", name: null } })).toEqual({
+      externalFolderId: null,
+      externalFolderName: null,
+    });
+  });
+});
+
+describe("normalizeClickUpToken", () => {
+  it("strips a pasted Bearer prefix and whitespace", () => {
+    expect(normalizeClickUpToken("Bearer pk_123_abc")).toBe("pk_123_abc");
+    expect(normalizeClickUpToken("bearer   pk_123_abc  ")).toBe("pk_123_abc");
+    expect(normalizeClickUpToken("  BEARER pk_123_abc")).toBe("pk_123_abc");
+  });
+
+  it("keeps plain personal tokens untouched", () => {
+    expect(normalizeClickUpToken("pk_123_abc")).toBe("pk_123_abc");
+    expect(normalizeClickUpToken("  pk_123_abc ")).toBe("pk_123_abc");
+  });
+
+  it("collapses a Bearer-only value to empty", () => {
+    expect(normalizeClickUpToken("Bearer")).toBe("");
+    expect(normalizeClickUpToken("   ")).toBe("");
+  });
+});
 
 describe("taskStatusCategory", () => {
   it("maps done and closed status types", () => {
@@ -79,6 +130,35 @@ describe("pickClickUpDescription", () => {
   it("returns an empty string when neither exists", () => {
     expect(pickClickUpDescription({})).toBe("");
     expect(pickClickUpDescription({ markdown_description: "  ", description: null })).toBe("");
+  });
+});
+
+describe("clickUpAssignees", () => {
+  it("collects unique usernames in sorted order", () => {
+    expect(
+      clickUpAssignees({
+        assignees: [
+          { id: 2, username: "Bo" },
+          { id: 1, username: "Ana" },
+          { id: 3, username: "Ana" },
+        ],
+      }),
+    ).toEqual(["Ana", "Bo"]);
+  });
+
+  it("skips missing, blank, and null assignees", () => {
+    expect(
+      clickUpAssignees({
+        assignees: [
+          { id: 1, username: "  " },
+          { username: null },
+          null,
+          { id: 2, username: "Ana" },
+        ],
+      }),
+    ).toEqual(["Ana"]);
+    expect(clickUpAssignees({})).toEqual([]);
+    expect(clickUpAssignees({ assignees: [] })).toEqual([]);
   });
 });
 

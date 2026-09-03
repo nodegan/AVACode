@@ -53,6 +53,9 @@ import Migration0037 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
 import Migration0038 from "./Migrations/038_ProjectTasks.ts";
 import Migration0039 from "./Migrations/039_ProjectTaskSyncConfigColumns.ts";
 import Migration0040 from "./Migrations/040_ProjectTaskListColumns.ts";
+import Migration0041 from "./Migrations/041_ProjectTaskAssignees.ts";
+import Migration0042 from "./Migrations/042_ProjectTaskListRegistry.ts";
+import Migration0043 from "./Migrations/043_ProjectTaskFolderColumns.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -105,6 +108,9 @@ export const migrationEntries = [
   [38, "ProjectTasks", Migration0038],
   [39, "ProjectTaskSyncConfigColumns", Migration0039],
   [40, "ProjectTaskListColumns", Migration0040],
+  [41, "ProjectTaskAssignees", Migration0041],
+  [42, "ProjectTaskListRegistry", Migration0042],
+  [43, "ProjectTaskFolderColumns", Migration0043],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

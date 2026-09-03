@@ -36,12 +36,12 @@ import {
 import {
   AddProjectTaskCommentInput,
   CreateManualProjectTaskInput,
-  ClickUpListSummary,
+  ClickUpConnectionStatus,
   DeleteProjectTaskInput,
-  GetProjectTaskClickUpListsInput,
   ProjectTask,
   ProjectTaskPanel,
-  SetProjectTaskClickUpSyncConfigInput,
+  ProjectTaskQueryResult,
+  QueryProjectTasksInput,
   SetProjectTaskClickUpTokenInput,
   SyncProjectClickUpTasksInput,
   UpdateProjectTaskInput,
@@ -592,6 +592,14 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
+    HttpApiEndpoint.post("queryTasks", "/api/tasks/query", {
+      headers: OptionalBearerHeaders,
+      payload: QueryProjectTasksInput,
+      success: ProjectTaskQueryResult,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
     HttpApiEndpoint.post("createManual", "/api/tasks/manual", {
       headers: OptionalBearerHeaders,
       payload: CreateManualProjectTaskInput,
@@ -639,18 +647,9 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("clickUpLists", "/api/tasks/clickup/lists", {
+    HttpApiEndpoint.get("clickUpStatus", "/api/tasks/clickup/status", {
       headers: OptionalBearerHeaders,
-      payload: GetProjectTaskClickUpListsInput,
-      success: Schema.Array(ClickUpListSummary),
-      error: EnvironmentHttpCommonError,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("setClickUpSyncConfig", "/api/tasks/clickup/config", {
-      headers: OptionalBearerHeaders,
-      payload: SetProjectTaskClickUpSyncConfigInput,
-      success: ProjectTaskPanel,
+      success: ClickUpConnectionStatus,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

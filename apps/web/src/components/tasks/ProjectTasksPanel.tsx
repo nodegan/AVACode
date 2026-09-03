@@ -10,10 +10,12 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type {
-  ClickUpListSummary,
   ProjectTask,
   ProjectTaskId,
+  ProjectTaskListFacet,
   ProjectTaskPanel,
+  ProjectTaskQueryFilter,
+  ProjectTaskQueryResult,
   ProjectTaskStatusCategory,
 } from "@t3tools/contracts";
 import { ProjectId, ThreadId } from "@t3tools/contracts";
@@ -22,19 +24,22 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { FetchHttpClient, type HttpMethod } from "effect/unstable/http";
 import {
-  ChevronDownIcon,
+  ArrowLeftIcon,
+  ChevronRightIcon,
+  FolderIcon,
+  FolderOpenIcon,
   Link2Icon,
+  ListIcon,
   Loader2Icon,
   MessageSquareIcon,
   RefreshCwIcon,
   SquareCheckBigIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { runtime } from "~/lib/runtime";
 import { Button } from "~/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import {
@@ -108,6 +113,7 @@ async function runTasksRequest<A, E>(
     client: Effect.Success<ReturnType<typeof makeEnvironmentHttpApiClient>>,
     headers: EnvironmentHttpAuthHeaders,
   ) => Effect.Effect<A, E>,
+  timeoutMs = 8_000,
 ): Promise<A> {
   return runtime.runPromise(
     Effect.gen(function* () {
@@ -121,7 +127,7 @@ async function runTasksRequest<A, E>(
       );
       return yield* executeEnvironmentHttpRequest(
         requestUrl,
-        8_000,
+        timeoutMs,
         withEnvironmentCredentials(prepared.httpAuthorization, request(client, headers)),
       );
     }),
@@ -143,6 +149,39 @@ async function fetchProjectTaskPanel(
     }),
   );
 }
+
+const TASKS_PAGE_SIZE = 10;
+
+async function fetchProjectTasksQuery(
+  prepared: PreparedConnection,
+  projectId: ProjectId,
+  filter: ProjectTaskQueryFilter,
+): Promise<ProjectTaskQueryResult> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/query");
+  return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.queryTasks({
+      headers,
+      payload: { projectId, filter },
+    }),
+  );
+}
+
+type ListSelection = { readonly kind: "all" } | { readonly kind: "list"; listId: string };
+
+interface TaskFolderGroup {
+  id: string;
+  name: string;
+  count: number;
+  lists: ProjectTaskListFacet[];
+}
+
+const statusCategoryLabels: Record<ProjectTaskStatusCategory, string> = {
+  open: "Open",
+  in_progress: "In progress",
+  done: "Done",
+  blocked: "Blocked",
+  unknown: "Unknown",
+};
 
 function formatTaskStatusLabel(task: ProjectTask): string {
   switch (task.statusCategory) {
@@ -358,6 +397,42 @@ function TaskGroup({
   );
 }
 
+function NavTreeRow(props: {
+  icon: ReactNode;
+  label: string;
+  count?: number;
+  active?: boolean;
+  trailing?: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition",
+        props.active
+          ? "bg-accent text-foreground"
+          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+      )}
+    >
+      <span
+        className={cn(
+          "shrink-0 [&_svg]:size-4",
+          props.active ? "text-foreground" : "text-muted-foreground/80",
+        )}
+      >
+        {props.icon}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{props.label}</span>
+      {typeof props.count === "number" ? (
+        <span className="shrink-0 text-xs tabular-nums opacity-60">{props.count}</span>
+      ) : null}
+      {props.trailing}
+    </button>
+  );
+}
+
 export function ProjectTasksPanel(props: {
   project: EnvironmentProject;
   activeThread: TaskPanelThreadContext;
@@ -372,20 +447,22 @@ export function ProjectTasksPanel(props: {
   const [error, setError] = useState<string | null>(null);
   const [manualTitle, setManualTitle] = useState("");
   const [manualDescription, setManualDescription] = useState("");
-  const [tokenDraft, setTokenDraft] = useState("");
-  const [workspaceIdDraft, setWorkspaceIdDraft] = useState("");
-  const [selectedListIds, setSelectedListIds] = useState<ReadonlyArray<string>>([]);
-  const [availableLists, setAvailableLists] = useState<ReadonlyArray<ClickUpListSummary>>([]);
-  const [listsWorkspaceId, setListsWorkspaceId] = useState<string | null>(null);
-  const [listsLoading, setListsLoading] = useState(false);
-  const [listsError, setListsError] = useState<string | null>(null);
-  const [configOpen, setConfigOpen] = useState(false);
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [openComments, setOpenComments] = useState<Record<string, boolean>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
+  const [tasksResult, setTasksResult] = useState<ProjectTaskQueryResult | null>(null);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [tasksError, setTasksError] = useState<string | null>(null);
+  const [listSelection, setListSelection] = useState<ListSelection>({ kind: "all" });
+  const [view, setView] = useState<"browse" | "tasks">("browse");
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
+  const [listSearch, setListSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<ProjectTaskStatusCategory | "all">("all");
+  const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
+  const [page, setPage] = useState(1);
+
   const clickup = panel?.clickup ?? null;
-  const syncConfig = clickup?.syncConfig ?? null;
   const tokenConfigured = clickup?.tokenConfigured ?? false;
 
   const loadPanel = useCallback(async () => {
@@ -406,9 +483,41 @@ export function ProjectTasksPanel(props: {
     }
   }, [prepared, projectId]);
 
+  const queryFilter = useMemo<ProjectTaskQueryFilter>(
+    () => ({
+      listIds: listSelection.kind === "list" ? [listSelection.listId] : [],
+      statuses: statusFilter === "all" ? [] : [statusFilter],
+      assignees: assigneeFilter === "all" ? [] : [assigneeFilter],
+      page,
+      pageSize: TASKS_PAGE_SIZE,
+    }),
+    [assigneeFilter, listSelection, page, statusFilter],
+  );
+
+  const loadTasks = useCallback(async () => {
+    if (prepared._tag === "None") {
+      setTasksResult(null);
+      setTasksLoading(false);
+      return;
+    }
+    setTasksLoading(true);
+    setTasksError(null);
+    try {
+      setTasksResult(await fetchProjectTasksQuery(prepared.value, projectId, queryFilter));
+    } catch (cause) {
+      setTasksError(cause instanceof Error ? cause.message : "Failed to load tasks.");
+    } finally {
+      setTasksLoading(false);
+    }
+  }, [prepared, projectId, queryFilter]);
+
   useEffect(() => {
     void loadPanel();
   }, [loadPanel]);
+
+  useEffect(() => {
+    void loadTasks();
+  }, [loadTasks]);
 
   const runMutation = useCallback(
     async (
@@ -428,6 +537,7 @@ export function ProjectTasksPanel(props: {
         } else {
           await loadPanel();
         }
+        await loadTasks();
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Task request failed.");
         if (key === "clickup-sync" || key === "clickup-token") {
@@ -441,106 +551,45 @@ export function ProjectTasksPanel(props: {
         setBusyKey(null);
       }
     },
-    [loadPanel, prepared],
-  );
-
-  const saveToken = useCallback(() => {
-    const token = tokenDraft.trim();
-    if (!token) return;
-    void runMutation("clickup-token", async (connection) => {
-      const requestUrl = environmentEndpointUrl(connection.httpBaseUrl, "/api/tasks/clickup/token");
-      await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
-        client.tasks.setClickUpToken({
-          headers,
-          payload: { token },
-        }),
-      );
-      setTokenDraft("");
-    });
-  }, [runMutation, tokenDraft]);
-
-  const clearToken = useCallback(() => {
-    void runMutation("clickup-token-clear", async (connection) => {
-      const requestUrl = environmentEndpointUrl(
-        connection.httpBaseUrl,
-        "/api/tasks/clickup/token/remove",
-      );
-      await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
-        client.tasks.clearClickUpToken({ headers }),
-      );
-      setWorkspaceIdDraft("");
-      setSelectedListIds([]);
-      setAvailableLists([]);
-      setListsWorkspaceId(null);
-    });
-  }, [runMutation]);
-
-  const loadClickUpLists = useCallback(
-    async (workspaceId: string) => {
-      if (prepared._tag === "None" || workspaceId.length === 0) return;
-      setListsLoading(true);
-      setListsError(null);
-      try {
-        const requestUrl = environmentEndpointUrl(
-          prepared.value.httpBaseUrl,
-          "/api/tasks/clickup/lists",
-        );
-        const lists = await runTasksRequest(prepared.value, requestUrl, "POST", (client, headers) =>
-          client.tasks.clickUpLists({
-            headers,
-            payload: { workspaceId },
-          }),
-        );
-        setAvailableLists(lists);
-      } catch (cause) {
-        setListsError(cause instanceof Error ? cause.message : "Failed to load ClickUp lists.");
-      } finally {
-        setListsLoading(false);
-      }
-    },
-    [prepared],
-  );
-
-  const applySyncConfig = useCallback(
-    (connection: PreparedConnection) => {
-      const workspaceId = workspaceIdDraft.trim();
-      const workspaceName = clickup?.availableWorkspaces.find(
-        (workspace) => workspace.id === workspaceId,
-      )?.name;
-      const requestUrl = environmentEndpointUrl(
-        connection.httpBaseUrl,
-        "/api/tasks/clickup/config",
-      );
-      return runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
-        client.tasks.setClickUpSyncConfig({
-          headers,
-          payload: {
-            projectId,
-            syncConfig: {
-              workspaceId,
-              listIds: [...selectedListIds],
-              ...(workspaceName ? { workspaceName } : {}),
-            },
-          },
-        }),
-      );
-    },
-    [clickup?.availableWorkspaces, projectId, selectedListIds, workspaceIdDraft],
+    [loadPanel, loadTasks, prepared],
   );
 
   const syncNow = useCallback(() => {
-    if (workspaceIdDraft.trim().length === 0) return;
     void runMutation("clickup-sync", async (connection) => {
-      await applySyncConfig(connection);
       const requestUrl = environmentEndpointUrl(connection.httpBaseUrl, "/api/tasks/clickup/sync");
-      return runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
+      // The server starts the sync in a detached fiber and answers right away.
+      // Poll the panel until lastSyncAt moves (or an error lands) instead of
+      // holding this request open, where any hop can cut it.
+      await runTasksRequest(connection, requestUrl, "POST", (client, headers) =>
         client.tasks.syncClickUpTasks({
           headers,
           payload: { projectId },
         }),
       );
+      const initialLastSyncAt = panel?.clickup.lastSyncAt ?? null;
+      const initialLastSyncError = panel?.clickup.lastSyncError ?? null;
+      let latest = panel;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        try {
+          latest = await fetchProjectTaskPanel(connection, projectId);
+          setPanel(latest);
+        } catch {
+          // A failed poll is transient; keep waiting for the sync to land.
+          continue;
+        }
+        const lastSyncAt = latest?.clickup.lastSyncAt ?? null;
+        const lastSyncError = latest?.clickup.lastSyncError ?? null;
+        if (
+          (lastSyncAt !== null && lastSyncAt !== initialLastSyncAt) ||
+          (lastSyncError !== null && lastSyncError !== initialLastSyncError)
+        ) {
+          break;
+        }
+      }
+      return latest ?? undefined;
     });
-  }, [applySyncConfig, projectId, runMutation, workspaceIdDraft]);
+  }, [panel, projectId, runMutation]);
 
   const createManual = useCallback(() => {
     const title = manualTitle.trim();
@@ -661,30 +710,8 @@ export function ProjectTasksPanel(props: {
     [navigate],
   );
 
-  // Seed the workspace/list drafts only when the persisted config actually
-  // changes, so refreshes never clobber in-progress edits.
-  const appliedConfigRef = useRef<string | null>(null);
-  useEffect(() => {
-    const key = syncConfig ? JSON.stringify(syncConfig) : null;
-    if (key === appliedConfigRef.current) return;
-    appliedConfigRef.current = key;
-    setWorkspaceIdDraft(syncConfig?.workspaceId ?? "");
-    setSelectedListIds(syncConfig?.listIds ?? []);
-  }, [syncConfig]);
-
-  useEffect(() => {
-    if (!tokenConfigured || !syncConfig) setConfigOpen(true);
-  }, [tokenConfigured, syncConfig]);
-
-  useEffect(() => {
-    if (!configOpen || workspaceIdDraft.length === 0 || listsWorkspaceId === workspaceIdDraft)
-      return;
-    setListsWorkspaceId(workspaceIdDraft);
-    void loadClickUpLists(workspaceIdDraft);
-  }, [configOpen, listsWorkspaceId, loadClickUpLists, workspaceIdDraft]);
-
   const taskGroups = useMemo(() => {
-    const tasks = panel?.tasks ?? [];
+    const tasks = tasksResult?.tasks ?? [];
     const manual = tasks.filter((task) => task.source === "manual");
     const byList = new Map<string, ProjectTask[]>();
     for (const task of tasks) {
@@ -701,23 +728,103 @@ export function ProjectTasksPanel(props: {
       manual,
       clickupGroups: [...byList.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
     };
-  }, [panel?.tasks]);
+  }, [tasksResult?.tasks]);
 
-  const taskCount = (panel?.tasks ?? []).length;
+  const facets = panel?.facets ?? null;
+  const totalTasks = tasksResult?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalTasks / TASKS_PAGE_SIZE));
+  const anyTasks = (facets?.statuses ?? []).some((facet) => facet.count > 0);
 
-  const workspaceOptions = useMemo(() => {
-    const options = clickup?.availableWorkspaces ?? [];
-    const savedId = syncConfig?.workspaceId;
-    if (savedId && !options.some((workspace) => workspace.id === savedId)) {
-      const savedName = syncConfig?.workspaceName ?? savedId;
-      return [{ id: savedId, name: savedName }, ...options];
+  // ClickUp nests tasks as Workspace > Space > Folder > List > Task; facets
+  // carry the list level with its folder path, so the browse view shows
+  // folders with their lists nested underneath. Lists without a folder sit at
+  // the top level.
+  const listTree = useMemo(() => {
+    const folders = new Map<string, TaskFolderGroup>();
+    const orphans: ProjectTaskListFacet[] = [];
+    for (const list of facets?.lists ?? []) {
+      if (list.folderId && list.folderName) {
+        const folder = folders.get(list.folderId) ?? {
+          id: list.folderId,
+          name: list.folderName,
+          count: 0,
+          lists: [],
+        };
+        folder.count += list.count;
+        folder.lists.push(list);
+        folders.set(list.folderId, folder);
+      } else {
+        orphans.push(list);
+      }
     }
-    return options;
-  }, [clickup?.availableWorkspaces, syncConfig?.workspaceId, syncConfig?.workspaceName]);
+    return {
+      folders: [...folders.values()].toSorted((left, right) => left.name.localeCompare(right.name)),
+      orphans,
+    };
+  }, [facets?.lists]);
 
-  const selectedWorkspaceLabel =
-    workspaceOptions.find((workspace) => workspace.id === workspaceIdDraft)?.name ??
-    (workspaceIdDraft.length > 0 ? workspaceIdDraft : null);
+  const listSearchQuery = listSearch.trim().toLowerCase();
+  const matchesList = useCallback(
+    (list: ProjectTaskListFacet) =>
+      listSearchQuery.length === 0 || list.name.toLowerCase().includes(listSearchQuery),
+    [listSearchQuery],
+  );
+
+  const visibleFolders = useMemo(() => {
+    if (listSearchQuery.length === 0) return listTree.folders;
+    return listTree.folders.filter(
+      (folder) =>
+        folder.name.toLowerCase().includes(listSearchQuery) ||
+        folder.lists.some((list) => list.name.toLowerCase().includes(listSearchQuery)),
+    );
+  }, [listSearchQuery, listTree.folders]);
+
+  const visibleOrphans = useMemo(
+    () => listTree.orphans.filter(matchesList),
+    [listTree.orphans, matchesList],
+  );
+
+  const browsableListCount =
+    listTree.folders.reduce((total, folder) => total + folder.lists.length, 0) +
+    listTree.orphans.length;
+  const allTasksCount =
+    listTree.folders.reduce((total, folder) => total + folder.count, 0) +
+    listTree.orphans.reduce((total, list) => total + list.count, 0);
+
+  const activeList =
+    listSelection.kind === "list"
+      ? ((facets?.lists ?? []).find((list) => list.id === listSelection.listId) ?? null)
+      : null;
+
+  const openAllTasks = useCallback(() => {
+    setListSelection({ kind: "all" });
+    setPage(1);
+    setView("tasks");
+  }, []);
+
+  const openTaskList = useCallback((listId: string) => {
+    setListSelection({ kind: "list", listId });
+    setPage(1);
+    setView("tasks");
+  }, []);
+
+  const toggleFolder = useCallback((folderId: string) => {
+    setExpandedFolders((current) => ({ ...current, [folderId]: !current[folderId] }));
+  }, []);
+
+  const backToBrowse = useCallback(() => {
+    setView("browse");
+  }, []);
+
+  const updateStatusFilter = useCallback((value: ProjectTaskStatusCategory | "all") => {
+    setStatusFilter(value);
+    setPage(1);
+  }, []);
+
+  const updateAssigneeFilter = useCallback((value: string) => {
+    setAssigneeFilter(value);
+    setPage(1);
+  }, []);
 
   const taskCardHandlers = {
     environmentId: props.project.environmentId,
@@ -736,6 +843,31 @@ export function ProjectTasksPanel(props: {
     onNavigateThread: navigateToThread,
   } satisfies Omit<TaskCardProps, "task" | "commentDraft" | "commentsOpen">;
 
+  const refreshButtons = (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={() => {
+        void loadPanel();
+        void loadTasks();
+      }}
+      disabled={loading || tasksLoading}
+    >
+      <RefreshCwIcon className={cn("size-3.5", (loading || tasksLoading) && "animate-spin")} />
+      Refresh
+    </Button>
+  );
+
+  const renderTaskCard = (task: ProjectTask) => (
+    <TaskCard
+      key={task.id}
+      task={task}
+      commentDraft={commentDrafts[task.id] ?? ""}
+      commentsOpen={openComments[task.id] ?? false}
+      {...taskCardHandlers}
+    />
+  );
+
   if (loading && panel === null) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center">
@@ -744,25 +876,223 @@ export function ProjectTasksPanel(props: {
     );
   }
 
+  if (view === "tasks") {
+    const activeTitle =
+      listSelection.kind === "list" ? (activeList?.name ?? "Task list") : "All tasks";
+    const filtersActive = statusFilter !== "all" || assigneeFilter !== "all";
+    return (
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col gap-5 p-4">
+          <section className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-1.5">
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={backToBrowse}
+                aria-label="Back to folders and lists"
+              >
+                <ArrowLeftIcon />
+              </Button>
+              <div className="min-w-0">
+                <h3 className="truncate text-sm font-semibold">{activeTitle}</h3>
+                {activeList?.folderName ? (
+                  <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <FolderOpenIcon className="size-3" />
+                    {activeList.folderName}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            {refreshButtons}
+          </section>
+
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+
+          <div className="grid grid-cols-2 gap-2">
+            <Select
+              value={statusFilter}
+              onValueChange={(value) => {
+                if (typeof value === "string")
+                  updateStatusFilter(value as ProjectTaskStatusCategory | "all");
+              }}
+            >
+              <SelectTrigger size="sm" aria-label="Filter by status">
+                <SelectValue>
+                  {statusFilter === "all" ? "All statuses" : statusCategoryLabels[statusFilter]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectItem value="all">All statuses</SelectItem>
+                {(facets?.statuses ?? []).map((facet) => (
+                  <SelectItem key={facet.value} value={facet.value}>
+                    {statusCategoryLabels[facet.value as ProjectTaskStatusCategory] ?? facet.value}
+                    <span className="ml-1 opacity-60">{facet.count}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={assigneeFilter}
+              onValueChange={(value) => {
+                if (typeof value === "string") updateAssigneeFilter(value);
+              }}
+            >
+              <SelectTrigger size="sm" aria-label="Filter by assignee">
+                <SelectValue>
+                  {assigneeFilter === "all" ? "All assignees" : assigneeFilter}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectItem value="all">All assignees</SelectItem>
+                {(facets?.assignees ?? []).map((facet) => (
+                  <SelectItem key={facet.value} value={facet.value}>
+                    {facet.value}
+                    <span className="ml-1 opacity-60">{facet.count}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {tasksError ? <p className="text-xs text-destructive">{tasksError}</p> : null}
+
+          {!tasksLoading && totalTasks === 0 ? (
+            <div className="rounded-xl border border-dashed border-border/80 bg-card/60 p-6 text-center text-sm text-muted-foreground">
+              {anyTasks ? "No tasks match the current filters." : "No tasks in this view yet."}
+            </div>
+          ) : null}
+
+          {taskGroups.manual.length > 0 ? (
+            <TaskGroup title="This project" tasks={taskGroups.manual} renderTask={renderTaskCard} />
+          ) : null}
+
+          {taskGroups.clickupGroups.map(([listName, tasks]) => (
+            <TaskGroup key={listName} title={listName} tasks={tasks} renderTask={renderTaskCard} />
+          ))}
+
+          {totalTasks > 0 ? (
+            <div className="flex items-center justify-between gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={page <= 1 || tasksLoading}
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+              >
+                Previous
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                Page {page} of {totalPages}
+                {filtersActive ? " · filters active" : ""}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={page >= totalPages || tasksLoading}
+                onClick={() => setPage((current) => current + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </ScrollArea>
+    );
+  }
+
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="flex flex-col gap-5 p-4">
         <section className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold">Tasks</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {taskCount === 0
-                ? `Nothing tracked for ${props.project.title} yet.`
-                : `${taskCount} task${taskCount === 1 ? "" : "s"} for ${props.project.title}.`}
-            </p>
-          </div>
-          <Button size="sm" variant="ghost" onClick={() => void loadPanel()} disabled={loading}>
-            <RefreshCwIcon className={cn("size-3.5", loading && "animate-spin")} />
-            Refresh
-          </Button>
+          <h3 className="text-sm font-semibold">Tasks</h3>
+          {refreshButtons}
         </section>
 
         {error ? <p className="text-xs text-destructive">{error}</p> : null}
+
+        <section className="space-y-2 rounded-xl border border-border/70 bg-card/80 p-3">
+          <Input
+            value={listSearch}
+            onChange={(event) => setListSearch(event.target.value)}
+            placeholder="Search folders and lists…"
+            aria-label="Search folders and lists"
+          />
+          {browsableListCount === 0 ? (
+            <p className="px-2 py-1 text-xs text-muted-foreground">
+              No ClickUp folders or lists yet. Sync to import them.
+            </p>
+          ) : (
+            <div className="space-y-0.5">
+              <NavTreeRow
+                icon={<SquareCheckBigIcon />}
+                label="All tasks"
+                count={allTasksCount}
+                active={listSelection.kind === "all"}
+                onClick={openAllTasks}
+              />
+              {visibleFolders.map((folder) => {
+                const expanded =
+                  listSearchQuery.length > 0 || (expandedFolders[folder.id] ?? false);
+                const matchingLists = folder.lists.filter(matchesList);
+                // A folder can match the search by name while none of its
+                // lists do; keep the drill-down usable by falling back to all
+                // of its lists.
+                const folderLists =
+                  listSearchQuery.length === 0 || matchingLists.length === 0
+                    ? folder.lists
+                    : matchingLists;
+                return (
+                  <div key={folder.id}>
+                    <NavTreeRow
+                      icon={expanded ? <FolderOpenIcon /> : <FolderIcon />}
+                      label={folder.name}
+                      count={folder.count}
+                      trailing={
+                        <ChevronRightIcon
+                          className={cn(
+                            "size-3.5 shrink-0 transition-transform",
+                            expanded && "rotate-90",
+                          )}
+                        />
+                      }
+                      onClick={() => toggleFolder(folder.id)}
+                    />
+                    {expanded ? (
+                      <div className="ml-3 space-y-0.5 border-l border-border/70 pl-2">
+                        {folderLists.map((list) => (
+                          <NavTreeRow
+                            key={list.id}
+                            icon={<ListIcon />}
+                            label={list.name}
+                            count={list.count}
+                            active={
+                              listSelection.kind === "list" && listSelection.listId === list.id
+                            }
+                            onClick={() => openTaskList(list.id)}
+                          />
+                        ))}
+                        {folderLists.length === 0 ? (
+                          <p className="px-2 py-1 text-xs text-muted-foreground">
+                            No lists in this folder.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {visibleOrphans.map((list) => (
+                <NavTreeRow
+                  key={list.id}
+                  icon={<ListIcon />}
+                  label={list.name}
+                  count={list.count}
+                  active={listSelection.kind === "list" && listSelection.listId === list.id}
+                  onClick={() => openTaskList(list.id)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
 
         <section className="rounded-xl border border-border/70 bg-card/80 p-3">
           <div className="flex gap-2">
@@ -793,209 +1123,41 @@ export function ProjectTasksPanel(props: {
           />
         </section>
 
-        {taskCount === 0 ? (
-          <div className="rounded-xl border border-dashed border-border/80 bg-card/60 p-6 text-center text-sm text-muted-foreground">
-            No tasks yet. Connect ClickUp below or add one above.
+        <section className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-card/80 px-3 py-2.5">
+          <div className="min-w-0 text-xs text-muted-foreground">
+            {!tokenConfigured ? (
+              <span>ClickUp not connected.</span>
+            ) : clickup?.lastSyncError ? (
+              <span className="text-destructive">Sync failed: {clickup.lastSyncError}</span>
+            ) : clickup?.lastSyncAt ? (
+              <span>Last synced {new Date(clickup.lastSyncAt).toLocaleString()}</span>
+            ) : (
+              <span>Connected. Never synced.</span>
+            )}
           </div>
-        ) : null}
-
-        {taskGroups.manual.length > 0 ? (
-          <TaskGroup
-            title="This project"
-            tasks={taskGroups.manual}
-            renderTask={(task) => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                commentDraft={commentDrafts[task.id] ?? ""}
-                commentsOpen={openComments[task.id] ?? false}
-                {...taskCardHandlers}
-              />
-            )}
-          />
-        ) : null}
-
-        {taskGroups.clickupGroups.map(([listName, tasks]) => (
-          <TaskGroup
-            key={listName}
-            title={listName}
-            tasks={tasks}
-            renderTask={(task) => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                commentDraft={commentDrafts[task.id] ?? ""}
-                commentsOpen={openComments[task.id] ?? false}
-                {...taskCardHandlers}
-              />
-            )}
-          />
-        ))}
-
-        <Collapsible open={configOpen} onOpenChange={setConfigOpen}>
-          <section className="rounded-xl border border-border/70 bg-card/80">
-            <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 p-4 text-left">
-              <div>
-                <h4 className="text-sm font-semibold">ClickUp</h4>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {!tokenConfigured
-                    ? "Not connected."
-                    : syncConfig
-                      ? `Syncing ${syncConfig.listIds.length === 0 ? "the whole workspace" : `${syncConfig.listIds.length} list${syncConfig.listIds.length === 1 ? "" : "s"}`}.`
-                      : "Connected. Pick a workspace to sync."}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                {clickup?.lastSyncError ? (
-                  <span className="rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[11px] text-destructive">
-                    Sync failed
-                  </span>
-                ) : tokenConfigured ? (
-                  <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-700 dark:text-emerald-300">
-                    Connected
-                  </span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {tokenConfigured ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={syncNow}
+                disabled={busyKey === "clickup-sync"}
+              >
+                {busyKey === "clickup-sync" ? (
+                  <Loader2Icon className="size-3.5 animate-spin" />
                 ) : null}
-                <ChevronDownIcon
-                  className={cn(
-                    "size-4 text-muted-foreground transition-transform",
-                    configOpen && "rotate-180",
-                  )}
-                />
-              </div>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="space-y-3 border-t border-border/60 p-4">
-                {!tokenConfigured ? (
-                  <div className="flex gap-2">
-                    <Input
-                      type="password"
-                      value={tokenDraft}
-                      onChange={(event) => setTokenDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") saveToken();
-                      }}
-                      placeholder="ClickUp personal API token (pk_…)"
-                    />
-                    <Button
-                      size="sm"
-                      onClick={saveToken}
-                      disabled={busyKey === "clickup-token" || tokenDraft.trim().length === 0}
-                    >
-                      {busyKey === "clickup-token" ? (
-                        <Loader2Icon className="size-3.5 animate-spin" />
-                      ) : null}
-                      Connect
-                    </Button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <Select
-                        value={workspaceIdDraft.length > 0 ? workspaceIdDraft : null}
-                        onValueChange={(value) => {
-                          if (typeof value === "string") {
-                            setWorkspaceIdDraft(value);
-                          }
-                        }}
-                      >
-                        <SelectTrigger
-                          className="min-w-0 flex-1"
-                          size="sm"
-                          aria-label="ClickUp workspace"
-                        >
-                          <SelectValue>{selectedWorkspaceLabel ?? "Pick a workspace"}</SelectValue>
-                        </SelectTrigger>
-                        <SelectContent alignItemWithTrigger={false}>
-                          {workspaceOptions.map((workspace) => (
-                            <SelectItem key={workspace.id} value={workspace.id}>
-                              {workspace.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Button
-                        size="sm"
-                        onClick={syncNow}
-                        disabled={
-                          busyKey === "clickup-sync" || workspaceIdDraft.trim().length === 0
-                        }
-                      >
-                        {busyKey === "clickup-sync" ? (
-                          <Loader2Icon className="size-3.5 animate-spin" />
-                        ) : null}
-                        Sync
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={clearToken}
-                        disabled={busyKey === "clickup-token-clear"}
-                      >
-                        Disconnect
-                      </Button>
-                    </div>
-
-                    <div className="min-h-8">
-                      {listsLoading ? (
-                        <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Loader2Icon className="size-3 animate-spin" />
-                          Loading lists…
-                        </p>
-                      ) : listsError ? (
-                        <p className="text-xs text-destructive">{listsError}</p>
-                      ) : availableLists.length > 0 ? (
-                        <div className="flex flex-wrap gap-1.5">
-                          {availableLists.map((list) => {
-                            const selected = selectedListIds.includes(list.id);
-                            return (
-                              <button
-                                key={list.id}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedListIds((current) =>
-                                    current.includes(list.id)
-                                      ? current.filter((entry) => entry !== list.id)
-                                      : [...current, list.id],
-                                  );
-                                }}
-                                className={cn(
-                                  "rounded-full border px-2 py-1 text-xs transition",
-                                  selected
-                                    ? "border-foreground bg-foreground text-background"
-                                    : "border-border/70 text-muted-foreground hover:border-foreground/40 hover:text-foreground",
-                                )}
-                              >
-                                {list.spaceName}
-                                {list.folderName ? ` / ${list.folderName}` : ""}
-                                {` / ${list.name}`}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ) : workspaceIdDraft.length > 0 ? (
-                        <p className="text-xs text-muted-foreground">
-                          No lists found. The whole workspace will sync.
-                        </p>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">
-                          Pick a workspace to choose lists. With no lists selected, the whole
-                          workspace syncs.
-                        </p>
-                      )}
-                    </div>
-
-                    <p className="text-xs text-muted-foreground">
-                      {clickup?.lastSyncAt
-                        ? `Last synced ${new Date(clickup.lastSyncAt).toLocaleString()}`
-                        : "Never synced."}
-                      {clickup?.lastSyncError ? ` Last error: ${clickup.lastSyncError}` : ""}
-                    </p>
-                  </>
-                )}
-              </div>
-            </CollapsibleContent>
-          </section>
-        </Collapsible>
+                Sync
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void navigate({ to: "/settings/connections", hash: "clickup" })}
+            >
+              Configure
+            </Button>
+          </div>
+        </section>
       </div>
     </ScrollArea>
   );

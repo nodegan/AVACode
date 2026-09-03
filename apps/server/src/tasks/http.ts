@@ -31,6 +31,16 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "queryTasks",
+        Effect.fn("environment.tasks.queryTasks")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* tasks
+            .queryTasks(args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_panel_failed", cause)));
+        }),
+      )
+      .handle(
         "createManual",
         Effect.fn("environment.tasks.createManual")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
@@ -91,22 +101,12 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
-        "clickUpLists",
-        Effect.fn("environment.tasks.clickUpLists")(function* (args) {
+        "clickUpStatus",
+        Effect.fn("environment.tasks.clickUpStatus")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* tasks
-            .getClickUpLists(args.payload)
-            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
-        }),
-      )
-      .handle(
-        "setClickUpSyncConfig",
-        Effect.fn("environment.tasks.setClickUpSyncConfig")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
-          return yield* tasks
-            .setClickUpSyncConfig(args.payload)
+            .getClickUpStatus()
             .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
         }),
       )

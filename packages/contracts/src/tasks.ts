@@ -35,20 +35,6 @@ export const ClickUpWorkspaceSummary = Schema.Struct({
 });
 export type ClickUpWorkspaceSummary = typeof ClickUpWorkspaceSummary.Type;
 
-export const ClickUpListSummary = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  name: TrimmedNonEmptyString,
-  spaceId: TrimmedNonEmptyString,
-  spaceName: TrimmedNonEmptyString,
-  folderId: Schema.NullOr(TrimmedNonEmptyString).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-  folderName: Schema.NullOr(TrimmedNonEmptyString).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-});
-export type ClickUpListSummary = typeof ClickUpListSummary.Type;
-
 export const ProjectTaskComment = Schema.Struct({
   id: ProjectTaskCommentId,
   taskId: ProjectTaskId,
@@ -78,6 +64,9 @@ export const ProjectTask = Schema.Struct({
   ),
   externalListName: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  assignees: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
   ),
   syncedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   externalUpdatedAt: Schema.NullOr(IsoDateTime).pipe(
@@ -111,12 +100,66 @@ export const ProjectTaskClickUpState = Schema.Struct({
 });
 export type ProjectTaskClickUpState = typeof ProjectTaskClickUpState.Type;
 
+export const ProjectTaskListFacet = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  count: Schema.Number,
+  folderId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  folderName: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+});
+export type ProjectTaskListFacet = typeof ProjectTaskListFacet.Type;
+
+export const ProjectTaskValueFacet = Schema.Struct({
+  value: TrimmedNonEmptyString,
+  count: Schema.Number,
+});
+export type ProjectTaskValueFacet = typeof ProjectTaskValueFacet.Type;
+
+export const ProjectTaskFacets = Schema.Struct({
+  lists: Schema.Array(ProjectTaskListFacet).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  statuses: Schema.Array(ProjectTaskValueFacet).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  assignees: Schema.Array(ProjectTaskValueFacet).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+});
+export type ProjectTaskFacets = typeof ProjectTaskFacets.Type;
+
 export const ProjectTaskPanel = Schema.Struct({
   projectId: ProjectId,
   clickup: ProjectTaskClickUpState,
-  tasks: Schema.Array(ProjectTask),
+  facets: ProjectTaskFacets,
 });
 export type ProjectTaskPanel = typeof ProjectTaskPanel.Type;
+
+export const ProjectTaskQueryFilter = Schema.Struct({
+  listIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  folderIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  statuses: Schema.optional(Schema.Array(ProjectTaskStatusCategory)),
+  assignees: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  page: Schema.optional(Schema.Number),
+  pageSize: Schema.optional(Schema.Number),
+});
+export type ProjectTaskQueryFilter = typeof ProjectTaskQueryFilter.Type;
+
+export const QueryProjectTasksInput = Schema.Struct({
+  projectId: ProjectId,
+  filter: Schema.optional(ProjectTaskQueryFilter),
+});
+export type QueryProjectTasksInput = typeof QueryProjectTasksInput.Type;
+
+export const ProjectTaskQueryResult = Schema.Struct({
+  tasks: Schema.Array(ProjectTask),
+  total: Schema.Number,
+  page: Schema.Number,
+  pageSize: Schema.Number,
+});
+export type ProjectTaskQueryResult = typeof ProjectTaskQueryResult.Type;
 
 export const GetProjectTaskPanelInput = Schema.Struct({
   projectId: ProjectId,
@@ -156,16 +199,10 @@ export const SetProjectTaskClickUpTokenInput = Schema.Struct({
 });
 export type SetProjectTaskClickUpTokenInput = typeof SetProjectTaskClickUpTokenInput.Type;
 
-export const GetProjectTaskClickUpListsInput = Schema.Struct({
-  workspaceId: TrimmedNonEmptyString,
+export const ClickUpConnectionStatus = Schema.Struct({
+  tokenConfigured: Schema.Boolean,
 });
-export type GetProjectTaskClickUpListsInput = typeof GetProjectTaskClickUpListsInput.Type;
-
-export const SetProjectTaskClickUpSyncConfigInput = Schema.Struct({
-  projectId: ProjectId,
-  syncConfig: Schema.NullOr(ProjectTaskSyncConfig),
-});
-export type SetProjectTaskClickUpSyncConfigInput = typeof SetProjectTaskClickUpSyncConfigInput.Type;
+export type ClickUpConnectionStatus = typeof ClickUpConnectionStatus.Type;
 
 export const SyncProjectClickUpTasksInput = Schema.Struct({
   projectId: ProjectId,
