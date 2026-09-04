@@ -717,12 +717,14 @@ export function TasksPanel(props: {
   const openAllTasks = useCallback(() => {
     setListSelection({ kind: "all" });
     setPage(1);
+    setSelectedTaskId(null);
     setView("tasks");
   }, []);
 
   const openTaskList = useCallback((listId: string) => {
     setListSelection({ kind: "list", listId });
     setPage(1);
+    setSelectedTaskId(null);
     setView("tasks");
   }, []);
 
@@ -741,6 +743,25 @@ export function TasksPanel(props: {
 
   // The header indicator's dialog hands its task over to this panel.
   useTaskPanelViewRequest(props.environmentId, openTaskDetail);
+
+  // Detail header breadcrumb: the task's own parent list, so a task opened
+  // from a thread link can still jump back to its list regardless of the
+  // panel's current selection. Manual tasks have no list and fall back to
+  // "All tasks".
+  const detailBreadcrumb = useMemo(() => {
+    if (!detailTask) return null;
+    const externalListId = detailTask.externalListId;
+    if (externalListId === null) {
+      return { key: "all", folderName: null, label: "All tasks", open: openAllTasks };
+    }
+    const facetList = (facets?.lists ?? []).find((list) => list.id === externalListId) ?? null;
+    return {
+      key: externalListId,
+      folderName: facetList?.folderName ?? null,
+      label: detailTask.externalListName ?? facetList?.name ?? "Task list",
+      open: () => openTaskList(externalListId),
+    };
+  }, [detailTask, facets?.lists, openAllTasks, openTaskList]);
 
   const updateStatusFilter = useCallback((value: TaskStatusCategory | "all") => {
     setStatusFilter(value);
@@ -851,9 +872,28 @@ export function TasksPanel(props: {
                 >
                   <ArrowLeftIcon />
                 </Button>
-                <h3 className="min-w-0 truncate text-sm font-semibold">
-                  {detailTask?.title ?? ""}
-                </h3>
+                {detailBreadcrumb ? (
+                  <button
+                    key={detailBreadcrumb.key}
+                    type="button"
+                    onClick={detailBreadcrumb.open}
+                    aria-label={`Back to ${detailBreadcrumb.label}`}
+                    className="flex min-w-0 items-center gap-1 rounded-lg px-1.5 py-1 text-sm text-muted-foreground transition hover:bg-muted/60 hover:text-foreground"
+                  >
+                    {detailBreadcrumb.folderName ? (
+                      <FolderOpenIcon className="size-3.5 shrink-0" />
+                    ) : detailTask?.externalListId ? (
+                      <ListIcon className="size-3.5 shrink-0" />
+                    ) : (
+                      <SquareCheckBigIcon className="size-3.5 shrink-0" />
+                    )}
+                    <span className="min-w-0 truncate">
+                      {detailBreadcrumb.folderName
+                        ? `${detailBreadcrumb.folderName} / ${detailBreadcrumb.label}`
+                        : detailBreadcrumb.label}
+                    </span>
+                  </button>
+                ) : null}
               </div>
               {detailTask ? taskDetailsActions(detailTask) : null}
             </section>
@@ -861,7 +901,10 @@ export function TasksPanel(props: {
             {error ? <p className="text-xs text-destructive">{error}</p> : null}
 
             {detailTask ? (
-              <TaskDetailsBody task={detailTask} environmentId={props.environmentId} />
+              <>
+                <h2 className="wrap-break-word text-base font-semibold">{detailTask.title}</h2>
+                <TaskDetailsBody task={detailTask} environmentId={props.environmentId} />
+              </>
             ) : detailLoading ? (
               <div className="flex justify-center py-6">
                 <Loader2Icon className="size-4 animate-spin text-muted-foreground" />

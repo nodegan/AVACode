@@ -7,15 +7,21 @@ import type {
 } from "@t3tools/contracts";
 import {
   ArrowUpRightIcon,
+  CalendarIcon,
+  CloudIcon,
   EllipsisIcon,
   ExternalLinkIcon,
+  HistoryIcon,
   Link2Icon,
+  ListIcon,
+  ListTodoIcon,
   MessageSquarePlusIcon,
   PanelRightIcon,
   PaperclipIcon,
   SquareCheckBigIcon,
   Trash2Icon,
   UnlinkIcon,
+  UserIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -290,42 +296,77 @@ export interface TaskDetailsBodyProps {
   environmentId?: EnvironmentId | undefined;
 }
 
+function formatTaskDate(timestamp: string): string {
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/** One labeled cell in the details card; string values truncate with the full text on hover. */
+function TaskDetailField(props: {
+  icon: ReactNode;
+  label: string;
+  value: ReactNode;
+  title?: string;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-2" title={props.title}>
+      <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{props.icon}</span>
+      <div className="min-w-0">
+        <p className="text-[11px] leading-tight text-muted-foreground">{props.label}</p>
+        {typeof props.value === "string" ? (
+          <p className="truncate text-sm leading-tight">{props.value}</p>
+        ) : (
+          props.value
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** The scrollable task detail content shared by the dialog and the tasks panel view. */
 export function TaskDetailsBody(props: TaskDetailsBodyProps) {
   const { task } = props;
   const imageUrls = useMemo(() => extractImageUrls(task.description), [task.description]);
-  const metadata: Array<{ label: string; value: string }> = [
-    { label: "Created", value: new Date(task.createdAt).toLocaleString() },
-    { label: "Updated", value: new Date(task.updatedAt).toLocaleString() },
-  ];
-  if (task.externalListName) {
-    metadata.push({ label: "List", value: task.externalListName });
-  }
-  if (task.assignees.length > 0) {
-    metadata.push({ label: "Assignees", value: task.assignees.join(", ") });
-  }
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">
-        <TaskStatusBadge task={task} />
-        {task.source === "manual" ? (
-          <span className="rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground">
-            Manual
-          </span>
+      <section className="grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-xl border border-border/70 bg-card/60 p-3">
+        <TaskDetailField
+          icon={<ListTodoIcon />}
+          label="Status"
+          value={<TaskStatusBadge task={task} />}
+        />
+        <TaskDetailField
+          icon={<CloudIcon />}
+          label="Source"
+          value={task.source === "manual" ? "Manual" : "ClickUp"}
+        />
+        <TaskDetailField
+          icon={<CalendarIcon />}
+          label="Created"
+          value={formatTaskDate(task.createdAt)}
+          title={new Date(task.createdAt).toLocaleString()}
+        />
+        <TaskDetailField
+          icon={<HistoryIcon />}
+          label="Updated"
+          value={formatTaskDate(task.updatedAt)}
+          title={new Date(task.updatedAt).toLocaleString()}
+        />
+        {task.externalListName ? (
+          <TaskDetailField icon={<ListIcon />} label="List" value={task.externalListName} />
         ) : null}
-        {task.externalUrl ? (
-          <a
-            href={task.externalUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="ml-auto inline-flex items-center gap-1 text-xs text-primary hover:underline"
-          >
-            <ExternalLinkIcon className="size-3" />
-            Open in ClickUp
-          </a>
+        {task.assignees.length > 0 ? (
+          <TaskDetailField
+            icon={<UserIcon />}
+            label="Assignees"
+            value={task.assignees.join(", ")}
+          />
         ) : null}
-      </div>
+      </section>
       <div className="space-y-1">
         <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           Description
@@ -359,19 +400,6 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
         ) : null}
       </div>
       <TaskAttachmentsSection task={task} environmentId={props.environmentId} />
-      <div className="space-y-1">
-        <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          Details
-        </h5>
-        <div className="space-y-1 text-sm">
-          {metadata.map((entry) => (
-            <div key={entry.label} className="flex gap-3">
-              <span className="w-20 shrink-0 text-muted-foreground">{entry.label}</span>
-              <span className="min-w-0 break-words">{entry.value}</span>
-            </div>
-          ))}
-        </div>
-      </div>
       <div className="space-y-2">
         <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           Comments
@@ -507,7 +535,8 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
   const showBranch = environmentId !== undefined && props.activeThreadId !== null;
   const showUnlink = linkedThreadId !== null && props.onUnlink !== undefined;
   const showDelete = props.onDelete !== undefined && task.source === "manual";
-  const showOverflow = showUnlink || showDelete;
+  const showOpenExternal = task.externalUrl !== null;
+  const showOverflow = showUnlink || showDelete || showOpenExternal;
 
   return (
     <div className="flex items-center gap-0.5">
@@ -548,6 +577,12 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
               <EllipsisIcon className="size-4" />
             </MenuTrigger>
             <MenuPopup align="end">
+              {showOpenExternal ? (
+                <MenuItem render={<a href={task.externalUrl} target="_blank" rel="noreferrer" />}>
+                  <ExternalLinkIcon />
+                  Open in ClickUp
+                </MenuItem>
+              ) : null}
               {showUnlink ? (
                 <MenuItem onClick={props.onUnlink} disabled={isLinkBusy}>
                   <UnlinkIcon />
@@ -598,7 +633,8 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
     props.onLink !== undefined ||
     props.onUnlink !== undefined ||
     props.onCreateThread !== undefined ||
-    props.onDelete !== undefined;
+    props.onDelete !== undefined ||
+    task.externalUrl !== null;
 
   return (
     <Dialog open onOpenChange={props.onOpenChange}>
