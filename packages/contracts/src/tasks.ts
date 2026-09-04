@@ -50,6 +50,10 @@ export const Task = Schema.Struct({
   externalTaskId: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** ClickUp's human-facing custom ID (e.g. `PR-1685`), when the workspace uses them. */
+  externalCustomId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   externalUrl: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),

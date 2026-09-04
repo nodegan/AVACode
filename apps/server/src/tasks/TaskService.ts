@@ -50,6 +50,7 @@ interface TaskRow {
   readonly statusColor: string | null;
   readonly linkedThreadId: string | null;
   readonly externalTaskId: string | null;
+  readonly externalCustomId: string | null;
   readonly externalUrl: string | null;
   readonly externalListId: string | null;
   readonly externalListName: string | null;
@@ -102,6 +103,7 @@ interface ClickUpAssigneeResponse {
 
 interface ClickUpTaskResponse {
   readonly id?: string | number;
+  readonly custom_id?: string | null;
   readonly name?: string;
   readonly description?: string | null;
   readonly markdown_description?: string | null;
@@ -316,6 +318,7 @@ function mapTaskRow(row: TaskRow, comments: ReadonlyArray<TaskComment>): Task {
     statusColor: row.statusColor,
     linkedThreadId: row.linkedThreadId,
     externalTaskId: row.externalTaskId,
+    externalCustomId: row.externalCustomId,
     externalUrl: row.externalUrl,
     externalListId: row.externalListId,
     externalListName: row.externalListName,
@@ -544,6 +547,7 @@ const make = Effect.gen(function* () {
         status_color AS "statusColor",
         linked_thread_id AS "linkedThreadId",
         external_task_id AS "externalTaskId",
+        external_custom_id AS "externalCustomId",
         external_url AS "externalUrl",
         external_list_id AS "externalListId",
         external_list_name AS "externalListName",
@@ -651,6 +655,7 @@ const make = Effect.gen(function* () {
           status_color AS "statusColor",
           linked_thread_id AS "linkedThreadId",
           external_task_id AS "externalTaskId",
+          external_custom_id AS "externalCustomId",
           external_url AS "externalUrl",
           external_list_id AS "externalListId",
           external_list_name AS "externalListName",
@@ -691,6 +696,7 @@ const make = Effect.gen(function* () {
         status_color,
         linked_thread_id,
         external_task_id,
+        external_custom_id,
         external_url,
         external_list_id,
         external_list_name,
@@ -712,6 +718,7 @@ const make = Effect.gen(function* () {
         ${row.statusColor},
         ${row.linkedThreadId},
         ${row.externalTaskId},
+        ${row.externalCustomId},
         ${row.externalUrl},
         ${row.externalListId},
         ${row.externalListName},
@@ -732,6 +739,7 @@ const make = Effect.gen(function* () {
         status_color = excluded.status_color,
         linked_thread_id = excluded.linked_thread_id,
         external_task_id = excluded.external_task_id,
+        external_custom_id = excluded.external_custom_id,
         external_url = excluded.external_url,
         external_list_id = excluded.external_list_id,
         external_list_name = excluded.external_list_name,
@@ -881,6 +889,7 @@ const make = Effect.gen(function* () {
         statusColor: null,
         linkedThreadId: null,
         externalTaskId: null,
+        externalCustomId: null,
         externalUrl: null,
         externalListId: null,
         externalListName: null,
@@ -915,6 +924,7 @@ const make = Effect.gen(function* () {
         linkedThreadId:
           input.linkedThreadId !== undefined ? input.linkedThreadId : current.linkedThreadId,
         externalTaskId: current.externalTaskId,
+        externalCustomId: current.externalCustomId,
         externalUrl: current.externalUrl,
         externalListId: current.externalListId,
         externalListName: current.externalListName,
@@ -1064,12 +1074,14 @@ const make = Effect.gen(function* () {
           readonly createdAt: string;
           readonly statusColor: string | null;
           readonly linkedThreadId: ThreadId | null;
+          readonly existingCustomId: string | null;
         }>`
           SELECT
             task_id AS "id",
             created_at AS "createdAt",
             status_color AS "statusColor",
-            linked_thread_id AS "linkedThreadId"
+            linked_thread_id AS "linkedThreadId",
+            external_custom_id AS "existingCustomId"
           FROM tasks
           WHERE source = ${"clickup"}
             AND external_task_id = ${externalTaskId}
@@ -1090,6 +1102,7 @@ const make = Effect.gen(function* () {
           statusColor: normalizeStatusColor(task.status?.color) ?? existing?.statusColor ?? null,
           linkedThreadId: existing?.linkedThreadId ?? null,
           externalTaskId,
+          externalCustomId: task.custom_id?.trim() || existing?.existingCustomId || null,
           externalUrl: task.url?.trim() ?? null,
           externalListId: listRef.externalListId,
           externalListName: listRef.externalListName,

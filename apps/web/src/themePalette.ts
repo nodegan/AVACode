@@ -306,7 +306,7 @@ function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
 // pixels users see after T3 Chat's blur and noise layers are composited.
 const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   canvas: "#fdf7fd",
-  // T3 Code's workspace header belongs to the chat panel, so keep it seamless
+  // AVA Code's workspace header belongs to the chat panel, so keep it seamless
   // with the light chat canvas rather than mapping it to T3 Chat's outer shell.
   chrome: "#fdf7fd",
   toolbar: "#fdf7fd",
@@ -351,7 +351,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   messageActionForeground: "#ffffff",
   messageActionHover: "#d56698",
   // T3 Chat uses a light lavender code surface in light mode. Keeping the
-  // dark plum pair here also leaked the dark palette into T3 Code's diffs.
+  // dark plum pair here also leaked the dark palette into AVA Code's diffs.
   codeBackground: "#f5ecf9",
   codeForeground: "#673c8b",
   // The live sidebar is transparent over T3 Chat's outer shell. Use that
@@ -374,7 +374,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
 
 const T3_CHAT_DARK_COLORS: ThemeColors = {
   canvas: "#1f1a24",
-  // T3 Code's workspace header belongs to the chat panel, so keep it seamless
+  // AVA Code's workspace header belongs to the chat panel, so keep it seamless
   // with the canvas rather than mapping it to T3 Chat's outer shell.
   chrome: "#1f1a24",
   toolbar: "#1f1a24",
@@ -420,7 +420,7 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
   messageAction: "#a3004c",
   messageActionForeground: "#fbd0e8",
   messageActionHover: "#a2004c",
-  // Diffs and file previews are full workspace surfaces in T3 Code. Keep them
+  // Diffs and file previews are full workspace surfaces in AVA Code. Keep them
   // continuous with the themed canvas instead of dropping to near-black.
   codeBackground: "#1f1a24",
   codeForeground: "#d8c3ef",
@@ -446,7 +446,7 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
 };
 
 /**
- * The palette T3 Code wears with no theme installed, captured from the app's
+ * The palette AVA Code wears with no theme installed, captured from the app's
  * stock tokens (index.css) so a draft seeded from the default look paints the
  * pixels the user is already seeing. Alpha-bearing tokens are flattened over
  * their real backdrops (canvas, or the sidebar for its rows) because theme
@@ -573,7 +573,7 @@ const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
 };
 
 /**
- * The standard T3 Code look as a theme palette, for seeding a new theme when
+ * The standard AVA Code look as a theme palette, for seeding a new theme when
  * no theme is installed. Distinct from {@link getDefaultThemeColors}, which
  * carries the flagship T3 Chat palette used to fill roles omitted by theme
  * files.
@@ -791,7 +791,7 @@ function solveOklchLightness(
 }
 
 /**
- * The status colors T3 Code shows without a theme, read from the app's own
+ * The status colors AVA Code shows without a theme, read from the app's own
  * tokens (red-500 / amber-500 families). Generated palettes fall back to
  * these instead of the flagship theme's, so an imported or created theme
  * never inherits a brand tint on destructive buttons and warnings.

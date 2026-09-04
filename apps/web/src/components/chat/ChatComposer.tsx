@@ -9,6 +9,7 @@ import type {
   RuntimeMode,
   ScopedThreadRef,
   ServerProvider,
+  Task,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -76,7 +77,9 @@ import {
 } from "../../lib/terminalContext";
 import { useComposerPathSearch } from "../../lib/composerPathSearchState";
 import { type ElementContextDraft } from "../../lib/elementContext";
+import { type TaskContextDraft, formatTaskAsThreadContext } from "../../lib/taskContext";
 import { ComposerPendingElementContexts } from "./ComposerPendingElementContexts";
+import { ComposerPendingTaskContexts } from "./ComposerPendingTaskContexts";
 import { ComposerPendingReviewComments } from "./ComposerPendingReviewComments";
 import { ComposerPreviewAnnotationCards } from "./ComposerPreviewAnnotationCards";
 import {
@@ -468,12 +471,15 @@ export interface ChatComposerHandle {
   }) => void;
   /** Insert a terminal context from the terminal drawer. */
   addTerminalContext: (selection: TerminalContextSelection) => void;
+  /** Attach a task as a context chip; re-attaching refreshes its snapshot. */
+  addTaskContext: (task: Task) => boolean;
   /** Get the current prompt/effort/model state for use in send. */
   getSendContext: () => {
     prompt: string;
     images: ComposerImageAttachment[];
     terminalContexts: TerminalContextDraft[];
     elementContexts: ElementContextDraft[];
+    taskContexts: TaskContextDraft[];
     previewAnnotations: PreviewAnnotationPayload[];
     reviewComments: ReviewCommentContext[];
     selectedPromptEffort: string | null;
@@ -676,6 +682,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerImages = composerDraft.images;
   const composerTerminalContexts = composerDraft.terminalContexts;
   const composerElementContexts = composerDraft.elementContexts;
+  const composerTaskContexts = composerDraft.taskContexts;
   const composerPreviewAnnotations = composerDraft.previewAnnotations;
   const composerReviewComments = composerDraft.reviewComments;
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
@@ -696,6 +703,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const removeComposerDraftElementContext = useComposerDraftStore(
     (store) => store.removeElementContext,
   );
+  const addComposerDraftTaskContext = useComposerDraftStore((store) => store.addTaskContext);
+  const removeComposerDraftTaskContext = useComposerDraftStore((store) => store.removeTaskContext);
   const removeComposerDraftPreviewAnnotation = useComposerDraftStore(
     (store) => store.removePreviewAnnotation,
   );
@@ -1317,6 +1326,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useEffect(() => {
     composerElementContextsRef.current = composerElementContexts;
   }, [composerElementContexts, composerElementContextsRef]);
+
+  // Task contexts have no parent-facing ref; the handle reads this snapshot.
+  const composerTaskContextsRef = useRef<TaskContextDraft[]>([]);
+  useEffect(() => {
+    composerTaskContextsRef.current = composerTaskContexts;
+  }, [composerTaskContexts]);
 
   // ------------------------------------------------------------------
   // Composer menu highlight sync
@@ -2601,11 +2616,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           composerEditorRef.current?.focusAt(nextCollapsedCursor);
         });
       },
+      addTaskContext: (task: Task): boolean => {
+        if (!activeThread) return false;
+        return addComposerDraftTaskContext(composerDraftTarget, {
+          id: randomUUID(),
+          taskId: task.id,
+          title: task.title,
+          markdown: formatTaskAsThreadContext(task),
+          threadId: activeThread.id,
+          addedAt: new Date().toISOString(),
+        });
+      },
       getSendContext: () => ({
         prompt: promptRef.current,
         images: composerImagesRef.current,
         terminalContexts: composerTerminalContextsRef.current,
         elementContexts: composerElementContextsRef.current,
+        taskContexts: composerTaskContextsRef.current,
         previewAnnotations: composerPreviewAnnotations,
         reviewComments: composerReviewComments,
         selectedPromptEffort,
@@ -2619,6 +2646,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }),
     [
       activeThread,
+      addComposerDraftTaskContext,
       composerDraftTarget,
       composerCursor,
       composerTerminalContexts,
@@ -2934,6 +2962,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onRemove={(contextId) =>
                     removeComposerDraftElementContext(composerDraftTarget, contextId)
                   }
+                  className="mb-3"
+                />
+              )}
+
+            {!isComposerCollapsedMobile &&
+              !isComposerApprovalState &&
+              pendingUserInputs.length === 0 && (
+                <ComposerPendingTaskContexts
+                  tasks={composerTaskContexts}
+                  onRemove={(taskId) => removeComposerDraftTaskContext(composerDraftTarget, taskId)}
                   className="mb-3"
                 />
               )}

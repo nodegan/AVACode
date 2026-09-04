@@ -58,6 +58,7 @@ import {
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
+  SquareCheckBigIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -98,6 +99,7 @@ import {
   extractTrailingElementContexts,
   type ParsedElementContextEntry,
 } from "~/lib/elementContext";
+import { type ParsedTaskContextEntry } from "~/lib/taskContext";
 import {
   extractTrailingPreviewAnnotation,
   type ParsedPreviewAnnotation,
@@ -1033,6 +1035,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             ))}
           </div>
         ) : null}
+        {displayedUserMessage.taskContexts.length > 0 ? (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {displayedUserMessage.taskContexts.map((task) => (
+              <UserMessageTaskContextChip key={task.title} task={task} />
+            ))}
+          </div>
+        ) : null}
         <CollapsibleUserMessageBody
           text={elementContextState.promptText}
           terminalContexts={terminalContexts}
@@ -1528,6 +1537,26 @@ const UserMessageElementContextChip = memo(function UserMessageElementContextChi
       />
       <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap leading-tight">
         {tooltipText}
+      </TooltipPopup>
+    </Tooltip>
+  );
+});
+
+const UserMessageTaskContextChip = memo(function UserMessageTaskContextChip(props: {
+  task: ParsedTaskContextEntry;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-border/70 bg-background/70 px-1.5 py-0.5 text-foreground/85 text-xs">
+            <SquareCheckBigIcon className="size-3 shrink-0" />
+            <span className="truncate">{props.task.title}</span>
+          </span>
+        }
+      />
+      <TooltipPopup side="top" className="max-w-96 leading-tight">
+        Task context sent with this message
       </TooltipPopup>
     </Tooltip>
   );

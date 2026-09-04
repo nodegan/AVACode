@@ -100,7 +100,7 @@ const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
 type ThemeEditorColors = Record<ThemeColorRole, string>;
 type ThemeEditorColorsByAppearance = Record<ThemeAppearance, ThemeEditorColors>;
 
-// A draft with no source theme starts as the standard T3 Code look — the
+// A draft with no source theme starts as the standard AVA Code look — the
 // palette on screen when no theme is installed — so creating from the default
 // theme changes nothing until the user edits a color.
 function getThemeEditorDefaults(appearance: ThemeAppearance): ThemeEditorColors {

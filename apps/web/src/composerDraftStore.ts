@@ -45,6 +45,7 @@ import {
   elementContextDedupKey,
   newElementContextId,
 } from "./lib/elementContext";
+import { type TaskContextDraft, taskContextDedupKey } from "./lib/taskContext";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
@@ -125,11 +126,22 @@ const PersistedElementContextDraft = Schema.Struct({
 });
 type PersistedElementContextDraft = typeof PersistedElementContextDraft.Type;
 
+const PersistedTaskContextDraft = Schema.Struct({
+  id: Schema.String,
+  taskId: Schema.String,
+  title: Schema.String,
+  markdown: Schema.String,
+  threadId: ThreadId,
+  addedAt: Schema.String,
+});
+type PersistedTaskContextDraft = typeof PersistedTaskContextDraft.Type;
+
 const PersistedComposerThreadDraftState = Schema.Struct({
   prompt: Schema.String,
   attachments: Schema.Array(PersistedComposerImageAttachment),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
   elementContexts: Schema.optionalKey(Schema.Array(PersistedElementContextDraft)),
+  taskContexts: Schema.optionalKey(Schema.Array(PersistedTaskContextDraft)),
   previewAnnotations: Schema.optionalKey(Schema.Array(PreviewAnnotationPayloadSchema)),
   reviewComments: Schema.optionalKey(Schema.Array(ReviewCommentContextSchema)),
   // Keyed by `ProviderInstanceId` (open branded slug) so custom provider
@@ -260,6 +272,8 @@ export interface ComposerThreadDraftState {
    * re-derive the snapshot from on reload.
    */
   elementContexts: ElementContextDraft[];
+  /** Tasks attached as context (chips); sent as one `<task_context>` block. */
+  taskContexts: TaskContextDraft[];
   previewAnnotations: PreviewAnnotationPayload[];
   reviewComments: ReviewCommentContext[];
   /**
@@ -474,6 +488,9 @@ interface ComposerDraftStoreState {
   ) => void;
   removeElementContext: (threadRef: ComposerThreadTarget, contextId: string) => void;
   clearElementContexts: (threadRef: ComposerThreadTarget) => void;
+  /** Attaches a task snapshot; re-attaching the same task replaces its snapshot. */
+  addTaskContext: (threadRef: ComposerThreadTarget, draft: TaskContextDraft) => boolean;
+  removeTaskContext: (threadRef: ComposerThreadTarget, taskId: string) => void;
   addPreviewAnnotation: (
     threadRef: ComposerThreadTarget,
     annotation: PreviewAnnotationPayload,
@@ -572,6 +589,7 @@ const EMPTY_IDS: string[] = [];
 const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
 const EMPTY_TERMINAL_CONTEXTS: TerminalContextDraft[] = [];
 const EMPTY_ELEMENT_CONTEXTS: ElementContextDraft[] = [];
+const EMPTY_TASK_CONTEXTS: TaskContextDraft[] = [];
 const EMPTY_PREVIEW_ANNOTATIONS: PreviewAnnotationPayload[] = [];
 const EMPTY_REVIEW_COMMENTS: ReviewCommentContext[] = [];
 Object.freeze(EMPTY_IMAGES);
@@ -594,6 +612,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
   elementContexts: EMPTY_ELEMENT_CONTEXTS,
+  taskContexts: EMPTY_TASK_CONTEXTS,
   previewAnnotations: EMPTY_PREVIEW_ANNOTATIONS,
   reviewComments: EMPTY_REVIEW_COMMENTS,
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
@@ -616,6 +635,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     persistedAttachments: [],
     terminalContexts: [],
     elementContexts: [],
+    taskContexts: [],
     previewAnnotations: [],
     reviewComments: [],
     modelSelectionByProvider: {},
@@ -1139,6 +1159,34 @@ function normalizePersistedElementContextDraft(
     source,
     styles: typeof candidate.styles === "string" ? candidate.styles : "",
   };
+}
+
+function normalizePersistedTaskContextDraft(value: unknown): PersistedTaskContextDraft | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const id = candidate.id;
+  const taskId = candidate.taskId;
+  const title = candidate.title;
+  const markdown = candidate.markdown;
+  const threadId = candidate.threadId;
+  const addedAt = candidate.addedAt;
+  if (
+    typeof id !== "string" ||
+    id.length === 0 ||
+    typeof taskId !== "string" ||
+    taskId.length === 0 ||
+    typeof title !== "string" ||
+    title.length === 0 ||
+    typeof markdown !== "string" ||
+    markdown.length === 0 ||
+    typeof threadId !== "string" ||
+    threadId.length === 0 ||
+    typeof addedAt !== "string" ||
+    addedAt.length === 0
+  ) {
+    return null;
+  }
+  return { id, taskId, title, markdown, threadId: threadId as ThreadId, addedAt };
 }
 
 function normalizePersistedTerminalContextDraft(
@@ -1670,6 +1718,12 @@ function normalizePersistedDraftsByThreadId(
           return normalized ? [normalized] : [];
         })
       : [];
+    const taskContexts = Array.isArray(draftCandidate.taskContexts)
+      ? draftCandidate.taskContexts.flatMap((entry) => {
+          const normalized = normalizePersistedTaskContextDraft(entry);
+          return normalized ? [normalized] : [];
+        })
+      : [];
     const reviewComments = Array.isArray(draftCandidate.reviewComments)
       ? draftCandidate.reviewComments.filter(isReviewCommentContext)
       : [];
@@ -1737,6 +1791,7 @@ function normalizePersistedDraftsByThreadId(
       attachments.length === 0 &&
       terminalContexts.length === 0 &&
       elementContexts.length === 0 &&
+      taskContexts.length === 0 &&
       reviewComments.length === 0 &&
       !hasModelData &&
       !runtimeMode &&
@@ -1761,6 +1816,7 @@ function normalizePersistedDraftsByThreadId(
       attachments,
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
       ...(elementContexts.length > 0 ? { elementContexts } : {}),
+      ...(taskContexts.length > 0 ? { taskContexts } : {}),
       ...(reviewComments.length > 0 ? { reviewComments } : {}),
       ...(hasModelData
         ? {
@@ -2138,6 +2194,7 @@ function toHydratedThreadDraft(
       persistedDraft.elementContexts?.map((context) => ({
         ...context,
       })) ?? [],
+    taskContexts: persistedDraft.taskContexts?.map((context) => ({ ...context })) ?? [],
     previewAnnotations:
       persistedDraft.previewAnnotations?.map((annotation) => ({ ...annotation })) ?? [],
     reviewComments: persistedDraft.reviewComments?.map((comment) => ({ ...comment })) ?? [],
@@ -3150,6 +3207,58 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
+        addTaskContext: (threadRef, draftInput) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return false;
+          const dedupKey = taskContextDedupKey(draftInput.taskId);
+          let accepted = false;
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const existingIndex = existing.taskContexts.findIndex(
+              (entry) => taskContextDedupKey(entry.taskId) === dedupKey,
+            );
+            accepted = true;
+            const taskContexts = [...existing.taskContexts];
+            if (existingIndex >= 0) {
+              // Re-attaching replaces the snapshot so the block reflects the
+              // task's current state.
+              taskContexts[existingIndex] = draftInput;
+            } else {
+              taskContexts.push(draftInput);
+            }
+            return {
+              draftsByThreadKey: {
+                ...state.draftsByThreadKey,
+                [threadKey]: { ...existing, taskContexts },
+              },
+            };
+          });
+          return accepted;
+        },
+        removeTaskContext: (threadRef, taskId) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
+          if (threadKey.length === 0) return;
+          const dedupKey = taskContextDedupKey(taskId);
+          set((state) => {
+            const current = state.draftsByThreadKey[threadKey];
+            if (!current) return state;
+            const filtered = current.taskContexts.filter(
+              (entry) => taskContextDedupKey(entry.taskId) !== dedupKey,
+            );
+            if (filtered.length === current.taskContexts.length) return state;
+            const nextDraft: ComposerThreadDraftState = {
+              ...current,
+              taskContexts: filtered,
+            };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) {
+              delete nextDraftsByThreadKey[threadKey];
+            } else {
+              nextDraftsByThreadKey[threadKey] = nextDraft;
+            }
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
         addPreviewAnnotation: (threadRef, annotation) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey) return;
@@ -3335,6 +3444,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               persistedAttachments: [],
               terminalContexts: [],
               elementContexts: [],
+              taskContexts: [],
               previewAnnotations: [],
               reviewComments: [],
             };

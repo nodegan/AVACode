@@ -39,8 +39,13 @@ import {
   syncClickUpTasks,
 } from "./taskApi";
 import { deleteTask as deleteTaskRequest } from "./taskApi";
-import { TaskDetailsDialog, TaskStatusBadge } from "./TaskDetailsDialog";
-import { notifyTasksChanged } from "./taskLinkStore";
+import {
+  TaskDetailsActions,
+  TaskDetailsBody,
+  TaskCommentComposer,
+  TaskStatusBadge,
+} from "./TaskDetailsDialog";
+import { notifyTasksChanged, useTaskPanelViewRequest } from "./taskLinkStore";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -296,7 +301,7 @@ export function TasksPanel(props: {
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState<string | null>(null);
   const [listSelection, setListSelection] = useState<ListSelection>({ kind: "all" });
-  const [view, setView] = useState<"browse" | "tasks">("browse");
+  const [view, setView] = useState<"browse" | "tasks" | "detail">("browse");
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
   const [listSearch, setListSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatusCategory | "all">("all");
@@ -548,7 +553,7 @@ export function TasksPanel(props: {
     };
   }, [tasksResult?.tasks]);
 
-  const selectedTask = useMemo(
+  const detailTask = useMemo(
     () =>
       selectedTaskId
         ? (tasksResult?.tasks.find((task) => task.id === selectedTaskId) ?? null)
@@ -642,6 +647,14 @@ export function TasksPanel(props: {
     setView("browse");
   }, []);
 
+  const openTaskDetail = useCallback((taskId: string) => {
+    setSelectedTaskId(taskId);
+    setView("detail");
+  }, []);
+
+  // The header indicator's dialog hands its task over to this panel.
+  useTaskPanelViewRequest(props.environmentId, openTaskDetail);
+
   const updateStatusFilter = useCallback((value: TaskStatusCategory | "all") => {
     setStatusFilter(value);
     setPage(1);
@@ -673,41 +686,87 @@ export function TasksPanel(props: {
       task={task}
       isCurrentThread={task.linkedThreadId === activeThreadId}
       busyKey={busyKey}
-      onOpenDetails={setSelectedTaskId}
+      onOpenDetails={openTaskDetail}
       onLink={setTaskLinkCurrent}
       onUnlink={setTaskLinkUnlinked}
     />
   );
 
-  const taskDetailsDialog = selectedTask ? (
-    <TaskDetailsDialog
-      task={selectedTask}
+  const taskDetailsActions = (task: Task) => (
+    <TaskDetailsActions
+      task={task}
       activeThreadId={activeThreadId}
+      environmentId={props.environmentId}
       busyKey={busyKey}
-      commentDraft={commentDrafts[selectedTask.id] ?? ""}
-      onCommentDraftChange={(value) => {
-        setCommentDrafts((current) => ({ ...current, [selectedTask.id]: value }));
-      }}
-      onAddComment={() => addComment(selectedTask.id)}
-      onDelete={() => deleteTask(selectedTask.id)}
-      onLink={() => setTaskLink(selectedTask.id, activeThreadId)}
-      onUnlink={() => setTaskLink(selectedTask.id, null)}
-      onCreateThread={() => void createLinkedThread(selectedTask)}
+      onDelete={() => deleteTask(task.id)}
+      onLink={() => setTaskLink(task.id, activeThreadId)}
+      onUnlink={() => setTaskLink(task.id, null)}
+      onCreateThread={() => void createLinkedThread(task)}
       onNavigateThread={() => {
-        if (selectedTask.linkedThreadId) {
-          navigateToThread(props.environmentId, selectedTask.linkedThreadId);
+        if (task.linkedThreadId) {
+          navigateToThread(props.environmentId, task.linkedThreadId);
         }
       }}
-      onOpenChange={(open) => {
-        if (!open) setSelectedTaskId(null);
-      }}
     />
-  ) : null;
+  );
 
   if (loading && panel === null) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center">
         <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (view === "detail") {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="flex flex-col gap-5 p-4">
+            <section className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setSelectedTaskId(null);
+                    setView("tasks");
+                  }}
+                  aria-label="Back to tasks"
+                >
+                  <ArrowLeftIcon />
+                </Button>
+                <h3 className="min-w-0 truncate text-sm font-semibold">
+                  {detailTask?.title ?? ""}
+                </h3>
+              </div>
+            </section>
+
+            {error ? <p className="text-xs text-destructive">{error}</p> : null}
+
+            {detailTask ? (
+              <TaskDetailsBody task={detailTask} />
+            ) : (
+              <p className="text-sm text-muted-foreground">This task is no longer available.</p>
+            )}
+          </div>
+        </ScrollArea>
+        {detailTask ? (
+          <div className="space-y-2 border-t bg-muted/72 p-4">
+            <TaskCommentComposer
+              task={detailTask}
+              busyKey={busyKey}
+              commentDraft={commentDrafts[detailTask.id] ?? ""}
+              onCommentDraftChange={(value) => {
+                setCommentDrafts((current) => ({ ...current, [detailTask.id]: value }));
+              }}
+              onAddComment={() => addComment(detailTask.id)}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              {taskDetailsActions(detailTask)}
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -831,7 +890,6 @@ export function TasksPanel(props: {
             </div>
           ) : null}
         </div>
-        {taskDetailsDialog}
       </ScrollArea>
     );
   }

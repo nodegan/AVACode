@@ -30,6 +30,8 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { ThreadTaskIndicator } from "../tasks/ThreadTaskIndicator";
+import { requestTaskPanelView } from "../tasks/taskLinkStore";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
@@ -128,6 +130,13 @@ export const ChatHeader = memo(function ChatHeader({
   const activeThreadRef = useMemo(
     () => scopeThreadRef(activeThreadEnvironmentId, activeThreadId),
     [activeThreadEnvironmentId, activeThreadId],
+  );
+  const showTaskInPanel = useCallback(
+    (taskId: string) => {
+      useRightPanelStore.getState().open(activeThreadRef, "tasks");
+      requestTaskPanelView(activeThreadEnvironmentId, taskId);
+    },
+    [activeThreadEnvironmentId, activeThreadRef],
   );
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -301,7 +310,11 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
-        <ThreadTaskIndicator environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
+        <ThreadTaskIndicator
+          environmentId={activeThreadEnvironmentId}
+          threadId={activeThreadId}
+          onShowInPanel={showTaskInPanel}
+        />
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}

@@ -1,6 +1,7 @@
 import { type ThreadId } from "@t3tools/contracts";
 
 import { extractTrailingElementContexts, type ParsedElementContextEntry } from "./elementContext";
+import { extractTrailingTaskContexts, type ParsedTaskContextEntry } from "./taskContext";
 
 export interface TerminalContextSelection {
   terminalId: string;
@@ -35,6 +36,8 @@ export interface DisplayedUserMessageState {
    * leak into the user's bubble.
    */
   elementContexts: ParsedElementContextEntry[];
+  /** Task titles extracted from the trailing `<task_context>` block (if any). */
+  taskContexts: ParsedTaskContextEntry[];
 }
 
 export interface ParsedTerminalContextEntry {
@@ -247,9 +250,10 @@ export function extractTrailingTerminalContexts(prompt: string): ExtractedTermin
 
 export function deriveDisplayedUserMessageState(prompt: string): DisplayedUserMessageState {
   // Order matters: send-time appends `<terminal_context>` first, then
-  // `<element_context>` last. Strip element first so the (now-trailing)
-  // terminal block can be matched by `extractTrailingTerminalContexts`.
-  const extractedElement = extractTrailingElementContexts(prompt);
+  // `<element_context>`, and `<task_context>` last (outermost). Strip from
+  // the outside in so each trailing block can be matched.
+  const extractedTask = extractTrailingTaskContexts(prompt);
+  const extractedElement = extractTrailingElementContexts(extractedTask.promptText);
   const extractedTerminal = extractTrailingTerminalContexts(extractedElement.promptText);
   return {
     visibleText: extractedTerminal.promptText,
@@ -258,6 +262,7 @@ export function deriveDisplayedUserMessageState(prompt: string): DisplayedUserMe
     previewTitle: extractedTerminal.previewTitle,
     contexts: extractedTerminal.contexts,
     elementContexts: extractedElement.contexts,
+    taskContexts: extractedTask.tasks,
   };
 }
 

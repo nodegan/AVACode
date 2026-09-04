@@ -1,6 +1,6 @@
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
 import { EnvironmentId, type TaskLinkSummary } from "@t3tools/contracts";
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import { usePreparedConnection } from "~/state/session";
 
@@ -96,4 +96,53 @@ export function useTaskLinksByThreadId(
   environmentId: EnvironmentId,
 ): ReadonlyMap<string, TaskLinkSummary> {
   return useTaskLinksStoreState(environmentId).byThreadId;
+}
+
+interface TaskPanelViewRequest {
+  readonly environmentId: EnvironmentId;
+  readonly taskId: string;
+  readonly seq: number;
+}
+
+// One-shot "open this task in the tasks panel" signal so surfaces outside the
+// panel (the header indicator's dialog) can drive its dedicated detail view.
+let panelViewRequest: TaskPanelViewRequest | null = null;
+let panelViewSeq = 0;
+const panelViewListeners = new Set<() => void>();
+
+export function requestTaskPanelView(environmentId: EnvironmentId, taskId: string) {
+  panelViewSeq += 1;
+  panelViewRequest = { environmentId, taskId, seq: panelViewSeq };
+  for (const listener of panelViewListeners) listener();
+}
+
+export function useTaskPanelViewRequest(
+  environmentId: EnvironmentId,
+  onTaskSelected: (taskId: string) => void,
+) {
+  const handlerRef = useRef(onTaskSelected);
+  useEffect(() => {
+    handlerRef.current = onTaskSelected;
+  });
+  const consumedSeqRef = useRef(0);
+  useEffect(() => {
+    // Consume on mount too: the request may fire before the panel exists.
+    const consume = () => {
+      const request = panelViewRequest;
+      if (
+        !request ||
+        request.environmentId !== environmentId ||
+        request.seq <= consumedSeqRef.current
+      ) {
+        return;
+      }
+      consumedSeqRef.current = request.seq;
+      handlerRef.current(request.taskId);
+    };
+    consume();
+    panelViewListeners.add(consume);
+    return () => {
+      panelViewListeners.delete(consume);
+    };
+  }, [environmentId]);
 }

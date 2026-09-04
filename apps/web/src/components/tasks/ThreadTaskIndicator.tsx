@@ -1,19 +1,33 @@
 import type { EnvironmentId, Task, ThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { SquareCheckBigIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { usePreparedConnection } from "~/state/session";
+import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TaskDetailsDialog } from "./TaskDetailsDialog";
 import { addTaskComment, deleteTask, fetchThreadTask, setTaskLinkedThread } from "./taskApi";
 import { notifyTasksChanged, useTaskLinksByThreadId } from "./taskLinkStore";
 
-export function ThreadTaskIndicator(props: { environmentId: EnvironmentId; threadId: ThreadId }) {
+export function ThreadTaskIndicator(props: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+  /** Hands the dialog's task over to the tasks panel's detail view. */
+  onShowInPanel?: ((taskId: string) => void) | undefined;
+}) {
   const { environmentId, threadId } = props;
   const preparedOption = usePreparedConnection(environmentId);
   const prepared = preparedOption._tag === "Some" ? preparedOption.value : null;
   const linksByThreadId = useTaskLinksByThreadId(environmentId);
   const summary = linksByThreadId.get(threadId) ?? null;
+  const threadRef = useMemo(
+    () => scopeThreadRef(environmentId, threadId),
+    [environmentId, threadId],
+  );
+  const isRightPanelOpen = useRightPanelStore(
+    (state) => selectThreadRightPanelState(state.byThreadKey, threadRef).isOpen,
+  );
   const [task, setTask] = useState<Task | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
@@ -26,6 +40,16 @@ export function ThreadTaskIndicator(props: { environmentId: EnvironmentId; threa
       setTask(null);
     }
   }, [prepared, threadId]);
+
+  const openTask = useCallback(() => {
+    // The right panel is the default surface; the dialog is only for when it
+    // is closed.
+    if (isRightPanelOpen && props.onShowInPanel && summary) {
+      props.onShowInPanel(summary.taskId);
+      return;
+    }
+    void openDetails();
+  }, [isRightPanelOpen, openDetails, props.onShowInPanel, summary]);
 
   const closeDetails = useCallback(() => {
     setTask(null);
@@ -66,7 +90,7 @@ export function ThreadTaskIndicator(props: { environmentId: EnvironmentId; threa
             <button
               type="button"
               aria-label={`Task: ${summary.title}`}
-              onClick={() => void openDetails()}
+              onClick={() => openTask()}
               className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm bg-primary/10 px-1 py-0.5 text-primary outline-none transition-colors hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring"
             >
               <SquareCheckBigIcon className="size-3.5 shrink-0" />
@@ -84,6 +108,7 @@ export function ThreadTaskIndicator(props: { environmentId: EnvironmentId; threa
         <TaskDetailsDialog
           task={task}
           activeThreadId={threadId}
+          environmentId={environmentId}
           busyKey={busyKey}
           commentDraft={commentDraft}
           onCommentDraftChange={setCommentDraft}
@@ -108,6 +133,14 @@ export function ThreadTaskIndicator(props: { environmentId: EnvironmentId; threa
               setTaskLinkedThread(connection, task.id, null),
             );
           }}
+          onShowInPanel={
+            props.onShowInPanel
+              ? () => {
+                  props.onShowInPanel?.(task.id);
+                  closeDetails();
+                }
+              : undefined
+          }
           onOpenChange={(open) => {
             if (!open) closeDetails();
           }}
