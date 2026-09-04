@@ -72,7 +72,11 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
-import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
+import {
+  getDriverOption,
+  isSettingsVisibleDriver,
+  SETTINGS_VISIBLE_DRIVER_OPTIONS,
+} from "./providerDriverMeta";
 import { searchableSetting } from "./settingsSearch";
 import {
   backgroundActivityOverrideSettings,
@@ -115,7 +119,7 @@ function withoutProviderInstanceFavorites(
   return favorites.filter((favorite) => favorite.provider !== instanceId);
 }
 
-const PROVIDER_SETTINGS = DRIVER_OPTIONS.map((definition) => ({
+const PROVIDER_SETTINGS = SETTINGS_VISIBLE_DRIVER_OPTIONS.map((definition) => ({
   provider: definition.value,
 }));
 
@@ -394,14 +398,7 @@ export function EnvironmentProviderSettings({
     () => new Map(providerUpdateCandidates.map((candidate) => [candidate.instanceId, candidate])),
     [providerUpdateCandidates],
   );
-  const visibleProviderSettings = PROVIDER_SETTINGS.filter(
-    (providerSettings) =>
-      providerSettings.provider !== "cursor" ||
-      serverProviders.some(
-        (provider) =>
-          provider.instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("cursor")),
-      ),
-  );
+  const visibleProviderSettings = PROVIDER_SETTINGS;
   const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
   const textGenInstanceId = textGenerationModelSelection.instanceId;
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
@@ -558,6 +555,9 @@ export function EnvironmentProviderSettings({
   }
   for (const [driver, list] of instancesByDriver) {
     if (visibleDriverKinds.has(driver)) continue;
+    // Known built-ins that are not settings-visible never render, even when
+    // an explicit instance entry exists; only unknown/fork drivers fall back.
+    if (getDriverOption(driver) !== undefined && !isSettingsVisibleDriver(driver)) continue;
     for (const [id, instance] of list) {
       rows.push({
         instanceId: id,

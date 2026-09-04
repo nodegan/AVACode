@@ -80,6 +80,23 @@ export const DRIVER_OPTION_BY_VALUE = PROVIDER_CLIENT_DEFINITION_BY_VALUE;
 export type DriverOption = ProviderClientDefinition;
 
 /**
+ * Drivers the settings UI surfaces. Hidden built-ins keep working server-side
+ * (an explicitly authored `providerInstances` entry still runs), but the
+ * settings page and the add-instance dialog only offer the visible set.
+ */
+const SETTINGS_VISIBLE_DRIVER_KINDS: ReadonlySet<ProviderDriverKind> = new Set([
+  ProviderDriverKind.make("opencode"),
+]);
+
+export const SETTINGS_VISIBLE_DRIVER_OPTIONS: readonly ProviderClientDefinition[] =
+  PROVIDER_CLIENT_DEFINITIONS.filter((definition) =>
+    SETTINGS_VISIBLE_DRIVER_KINDS.has(definition.value),
+  );
+
+export const isSettingsVisibleDriver = (driver: ProviderDriverKind): boolean =>
+  SETTINGS_VISIBLE_DRIVER_KINDS.has(driver);
+
+/**
  * Look up the driver metadata for an instance's `driver` field. Accepts
  * Returns `undefined` for fork / unknown drivers so callers can decide how
  * to render them — typically by falling back to a generic card.
