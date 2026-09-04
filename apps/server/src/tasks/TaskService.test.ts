@@ -436,6 +436,6 @@ it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the backgro
     // The stored creation date is ClickUp's, not the sync time.
     const loginBug = byFolder.tasks.find((task) => task.title === "Fix login bug");
     assert.ok(loginBug);
-    assert.strictEqual(loginBug.createdAt, DateTime.formatIso(DateTime.unsafeMake(1567700000000)));
+    assert.strictEqual(loginBug.createdAt, DateTime.formatIso(DateTime.makeUnsafe(1567700000000)));
   }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
 );
