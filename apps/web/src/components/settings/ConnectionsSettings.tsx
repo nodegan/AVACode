@@ -3354,6 +3354,8 @@ export function ConnectionsSettings() {
         </SettingsSection>
       )}
 
+      <ClickUpSettings />
+
       <SettingsSection
         {...searchableSetting("remote-environments")}
         headerAction={
@@ -3432,8 +3434,6 @@ export function ConnectionsSettings() {
           savedEnvironments={savedEnvironments}
         />
       </SettingsSection>
-
-      <ClickUpSettings />
     </SettingsPageContainer>
   );
 }
