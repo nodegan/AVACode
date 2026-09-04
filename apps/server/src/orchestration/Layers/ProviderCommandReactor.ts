@@ -99,6 +99,8 @@ const MAX_THREAD_TITLE_CONTEXT_CHARS = 8_000;
 const MAX_FIRST_USER_TITLE_CONTEXT_CHARS = 2_000;
 const THREAD_TITLE_CONTEXT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
 const FIRST_USER_CONTEXT_TRUNCATION_MARKER = "\n[First user message truncated]";
+// ClickUp latency spikes; the turn brief must not wait on them.
+const LINKED_TASK_COMMENTS_TIMEOUT = Duration.seconds(3);
 
 type ThreadTitleMessage = {
   readonly role: "user" | "assistant" | "system";
@@ -741,6 +743,8 @@ const make = Effect.gen(function* () {
   });
 
   // Best-effort: a linked task enriches the turn but must never block it.
+  // ClickUp comments join the brief when they answer quickly; a slow ClickUp
+  // degrades the context to notes-only rather than delay the turn.
   const loadLinkedTaskContext = Effect.fnUntraced(function* (threadId: ThreadId) {
     const task = yield* taskService
       .queryTasks({ filter: { linkedThreadId: threadId, page: 1, pageSize: 1 } })
@@ -753,7 +757,22 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.as(null)),
         ),
       );
-    return task === null ? null : buildLinkedTaskContextBlock(task);
+    if (task === null) return null;
+    if (task.externalTaskId === null) {
+      return buildLinkedTaskContextBlock(task);
+    }
+    const comments = yield* taskService.getTaskComments(task.id).pipe(
+      Effect.map((result) => result.comments),
+      Effect.timeout(LINKED_TASK_COMMENTS_TIMEOUT),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor timed out loading task comments", {
+          threadId,
+          taskId: task.id,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as([])),
+      ),
+    );
+    return buildLinkedTaskContextBlock(task, comments);
   });
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {

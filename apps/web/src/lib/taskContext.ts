@@ -1,33 +1,14 @@
 import type { Task, ThreadId } from "@t3tools/contracts";
+import { formatTaskContext } from "@t3tools/shared/taskContext";
 
-function taskStatusLabel(task: Task): string {
-  switch (task.statusCategory) {
-    case "done":
-      return "Done";
-    case "in_progress":
-      return "In progress";
-    case "blocked":
-      return "Blocked";
-    case "open":
-      return "Open";
-    default:
-      return task.statusLabel;
-  }
-}
-
-/** Markdown body for the task, shared by context blocks and tests. */
+/**
+ * Markdown body for the task, shared with the server's linked-task injection
+ * (both render through the shared task-context formatter) so the model sees
+ * the same block either way. Composer drafts snapshot the task payload, which
+ * carries local notes but not ClickUp comments.
+ */
 export function formatTaskAsThreadContext(task: Task): string {
-  const lines: string[] = [`## Task: ${task.title}`, ""];
-
-  const meta: string[] = [`Status: ${taskStatusLabel(task)}`];
-  if (task.externalListName) meta.push(`List: ${task.externalListName}`);
-  if (task.assignees.length > 0) meta.push(`Assignees: ${task.assignees.join(", ")}`);
-  lines.push(...meta, "");
-
-  if (task.description) lines.push(task.description.trim(), "");
-  if (task.externalUrl) lines.push(`Source: ${task.externalUrl}`, "");
-
-  return lines.join("\n").trim();
+  return formatTaskContext(task);
 }
 
 /**

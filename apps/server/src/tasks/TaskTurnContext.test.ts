@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { Task } from "@t3tools/contracts";
+import type { Task, TaskClickUpComment, TaskNote } from "@t3tools/contracts";
 import { TaskId, ThreadId } from "@t3tools/contracts";
 
 import { buildLinkedTaskContextBlock, formatTaskAsTurnContext } from "./TaskTurnContext.ts";
@@ -25,10 +25,31 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     externalUpdatedAt: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
-    comments: [],
+    notes: [],
     ...overrides,
   };
 }
+
+const makeComment = (overrides: Partial<TaskClickUpComment>): TaskClickUpComment => ({
+  id: "c-1",
+  parentId: null,
+  body: "Root comment",
+  authorName: "Ana",
+  authorAvatarUrl: null,
+  authorColor: null,
+  createdAt: "2026-09-01T10:00:00.000Z",
+  resolved: false,
+  ...overrides,
+});
+
+const makeNote = (overrides: Partial<TaskNote>): TaskNote => ({
+  id: "n-1",
+  taskId: "task-1",
+  body: "Repro is on staging.",
+  createdAt: "2026-09-02T00:00:00.000Z",
+  updatedAt: "2026-09-02T00:00:00.000Z",
+  ...overrides,
+});
 
 describe("TaskTurnContext", () => {
   it("formats title, status, and description", () => {
@@ -64,5 +85,25 @@ describe("TaskTurnContext", () => {
     );
     expect(block).toContain("## Task: Fix login redirect");
     expect(block.endsWith("</task_context>")).toBe(true);
+  });
+
+  it("appends threaded ClickUp comments when provided", () => {
+    const markdown = formatTaskAsTurnContext(makeTask(), [
+      makeComment({ id: "c-1", body: "Root comment" }),
+      makeComment({ id: "c-2", parentId: "c-1", body: "A reply", authorName: "Bo" }),
+    ]);
+    expect(markdown).toContain(
+      [
+        "### ClickUp comments",
+        "- **Ana** (2026-09-01): Root comment",
+        "  - **Bo** (2026-09-01): A reply",
+      ].join("\n"),
+    );
+  });
+
+  it("appends notes and omits the comments section without them", () => {
+    const markdown = formatTaskAsTurnContext(makeTask({ notes: [makeNote({})] }));
+    expect(markdown).toContain("### Notes\n- (2026-09-02): Repro is on staging.");
+    expect(markdown).not.toContain("### ClickUp comments");
   });
 });

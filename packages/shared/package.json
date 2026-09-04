@@ -71,6 +71,10 @@
       "types": "./src/toolActivity.ts",
       "import": "./src/toolActivity.ts"
     },
+    "./taskContext": {
+      "types": "./src/taskContext.ts",
+      "import": "./src/taskContext.ts"
+    },
     "./Struct": {
       "types": "./src/Struct.ts",
       "import": "./src/Struct.ts"

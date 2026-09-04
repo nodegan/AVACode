@@ -30,7 +30,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     externalUpdatedAt: null,
     createdAt: "2026-09-01T00:00:00.000Z",
     updatedAt: "2026-09-02T00:00:00.000Z",
-    comments: [],
+    notes: [],
     ...overrides,
   } as Task;
 }
