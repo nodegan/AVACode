@@ -60,11 +60,17 @@ function SidebarBrand() {
   return (
     <Link
       aria-label="Go to threads"
-      className="sidebar-brand relative z-10 ml-[var(--workspace-titlebar-content-left)] h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md text-foreground outline-hidden ring-ring focus-visible:ring-2"
+      className="sidebar-brand relative z-10 ml-[var(--workspace-titlebar-content-left)] h-7 w-fit min-w-0 shrink-0 items-center gap-1.5 overflow-hidden rounded-md text-foreground outline-hidden ring-ring focus-visible:ring-2"
       to="/"
     >
-      <span className="truncate text-sm font-bold tracking-tight">AVA</span>
-      <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
+      <img src="/logo.svg" alt="" aria-hidden className="block h-3.5 w-auto shrink-0 dark:hidden" />
+      <img
+        src="/logo-dark.svg"
+        alt=""
+        aria-hidden
+        className="hidden h-3.5 w-auto shrink-0 dark:block"
+      />
+      <span className="truncate text-base font-medium tracking-tight text-muted-foreground">
         Code
       </span>
     </Link>
