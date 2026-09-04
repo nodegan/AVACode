@@ -39,6 +39,8 @@ import {
   ClickUpConnectionStatus,
   DeleteTaskInput,
   Task,
+  TaskAttachmentsResult,
+  TaskId,
   TaskLinksResult,
   TaskPanel,
   TaskQueryResult,
@@ -578,6 +580,10 @@ export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
+const EnvironmentTaskAttachmentsParams = Schema.Struct({
+  taskId: TaskId,
+});
+
 export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
   .add(
     HttpApiEndpoint.get("panel", "/api/tasks/panel", {
@@ -630,6 +636,14 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
       headers: OptionalBearerHeaders,
       payload: AddTaskCommentInput,
       success: Task,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("taskAttachments", "/api/tasks/attachments/:taskId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentTaskAttachmentsParams,
+      success: TaskAttachmentsResult,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

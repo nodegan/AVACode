@@ -29,11 +29,14 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { FetchHttpClient } from "effect/unstable/http";
 import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import { TaskService, TaskServiceLive } from "../../tasks/TaskService.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -93,7 +96,7 @@ async function waitFor(
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
+    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery | TaskService,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -393,6 +396,13 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
       Layer.provideMerge(makeProviderRegistryLayer(providerSnapshots as never)),
       Layer.provideMerge(
+        TaskServiceLive.pipe(
+          Layer.provide(ServerSecretStore.layer),
+          Layer.provide(FetchHttpClient.layer),
+          Layer.provide(SqlitePersistenceMemory),
+        ),
+      ),
+      Layer.provideMerge(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           renameBranch,
         } satisfies Partial<GitWorkflowService.GitWorkflowService["Service"]>),
@@ -421,6 +431,7 @@ describe("ProviderCommandReactor", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
+    const taskService = await runtime.runPromise(Effect.service(TaskService));
     const runEffect = <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect);
 
     await Effect.runPromise(
@@ -492,6 +503,7 @@ describe("ProviderCommandReactor", () => {
     return {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
+      taskService,
       startSession,
       sendTurn,
       interruptTurn,
@@ -551,6 +563,135 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
+
+  effectIt.effect(
+    "briefs the model with the linked task on the first turn of a fresh session",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const taskService = harness.taskService;
+        const now = "2026-01-01T00:00:00.000Z";
+
+        const task = yield* taskService.createManualTask({
+          title: "Fix login redirect",
+          description: "Users land on the home screen after SSO.",
+        });
+        yield* taskService.updateTask({
+          taskId: task.id,
+          linkedThreadId: ThreadId.make("thread-1"),
+        });
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-task-context"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-task-context"),
+            role: "user",
+            text: "please fix",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        const request = harness.sendTurn.mock.calls[0]?.[0] as { input: string };
+        expect(request.input).toMatch(/^please fix\n\n<task_context>/);
+        expect(request.input).toContain("## Task: Fix login redirect");
+        expect(request.input).toContain("Users land on the home screen after SSO.");
+        expect(request.input.endsWith("</task_context>")).toBe(true);
+      }),
+  );
+
+  effectIt.effect("does not repeat linked task context once the provider session has history", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const taskService = harness.taskService;
+      const now = "2026-01-01T00:00:00.000Z";
+
+      const task = yield* taskService.createManualTask({ title: "Fix login redirect" });
+      yield* taskService.updateTask({
+        taskId: task.id,
+        linkedThreadId: ThreadId.make("thread-1"),
+      });
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-context-first"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-context-first"),
+          role: "user",
+          text: "first message",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-context-second"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-context-second"),
+          role: "user",
+          text: "second message",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+
+      const firstRequest = harness.sendTurn.mock.calls[0]?.[0] as { input: string };
+      const secondRequest = harness.sendTurn.mock.calls[1]?.[0] as { input: string };
+      expect(firstRequest.input).toContain("<task_context>");
+      expect(secondRequest.input).not.toContain("<task_context>");
+      expect(secondRequest.input).toBe("second message");
+    }),
+  );
+
+  effectIt.effect(
+    "skips linked task context when the user message already carries task context",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const taskService = harness.taskService;
+        const now = "2026-01-01T00:00:00.000Z";
+
+        const task = yield* taskService.createManualTask({ title: "Fix login redirect" });
+        yield* taskService.updateTask({
+          taskId: task.id,
+          linkedThreadId: ThreadId.make("thread-1"),
+        });
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-preattached"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-preattached"),
+            role: "user",
+            text: "please fix\n\n<task_context>\n## Task: Manually attached\n</task_context>",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        const request = harness.sendTurn.mock.calls[0]?.[0] as { input: string };
+        expect(request.input).not.toContain("This thread is linked to the following task:");
+        expect((request.input.match(/<task_context>/g) ?? []).length).toBe(1);
+      }),
+  );
 
   effectIt.effect("projects starting before a slow provider session finishes", () =>
     Effect.gen(function* () {

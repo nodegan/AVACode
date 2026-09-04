@@ -1637,6 +1637,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const { manager } = yield* makeManager({
         serverSettings: {
+          providers: {
+            codex: {
+              enabled: true,
+            },
+          },
           providerInstances: {
             [missingInstanceId]: {
               driver: ProviderDriverKind.make("missing-driver"),

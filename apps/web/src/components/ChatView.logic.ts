@@ -434,15 +434,16 @@ export function getStartedThreadModelChangeBlockReason(input: {
   };
 }
 
-export async function waitForStartedServerThread(
+async function waitForThreadDetail(
   threadRef: ScopedThreadRef,
-  timeoutMs = 1_000,
+  isReady: (thread: Thread | null | undefined) => boolean,
+  timeoutMs: number,
 ): Promise<boolean> {
   const threadAtom = environmentThreadDetails.detailAtom(threadRef);
   const getThread = () => appAtomRegistry.get(threadAtom);
   const thread = getThread();
 
-  if (threadHasStarted(thread)) {
+  if (isReady(thread)) {
     return true;
   }
 
@@ -462,13 +463,13 @@ export async function waitForStartedServerThread(
     };
 
     const unsubscribe = appAtomRegistry.subscribe(threadAtom, (thread) => {
-      if (!threadHasStarted(thread)) {
+      if (!isReady(thread)) {
         return;
       }
       finish(true);
     });
 
-    if (threadHasStarted(getThread())) {
+    if (isReady(getThread())) {
       finish(true);
       return;
     }
@@ -477,6 +478,26 @@ export async function waitForStartedServerThread(
       finish(false);
     }, timeoutMs);
   });
+}
+
+/**
+ * Wait until the thread's detail snapshot exists in the client store. Used by
+ * flows that create a thread and navigate to it immediately: without this,
+ * the thread route renders "missing" and bounces to home before the WS
+ * subscription delivers the server thread.
+ */
+export async function waitForServerThreadDetail(
+  threadRef: ScopedThreadRef,
+  timeoutMs = 1_000,
+): Promise<boolean> {
+  return await waitForThreadDetail(threadRef, (thread) => thread !== null, timeoutMs);
+}
+
+export async function waitForStartedServerThread(
+  threadRef: ScopedThreadRef,
+  timeoutMs = 1_000,
+): Promise<boolean> {
+  return await waitForThreadDetail(threadRef, threadHasStarted, timeoutMs);
 }
 
 export interface LocalDispatchSnapshot {

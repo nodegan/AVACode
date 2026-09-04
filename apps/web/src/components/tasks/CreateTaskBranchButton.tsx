@@ -4,7 +4,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon, GitBranchIcon } from "lucide-react";
+import { GitBranchIcon } from "lucide-react";
 import { useState } from "react";
 
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -14,6 +14,7 @@ import { useProject, useThread } from "~/state/entities";
 import { buildTaskBranchName, TASK_BRANCH_PREFIXES } from "~/lib/taskContext";
 import { toastManager } from "../ui/toast";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -81,16 +82,26 @@ export function CreateTaskBranchButton(props: CreateTaskBranchButtonProps) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <Button variant="outline" disabled={props.disabled || !ready || pending}>
-            <GitBranchIcon className="size-3.5" />
-            Create branch
-            <ChevronDownIcon className="size-3 opacity-70" />
-          </Button>
-        }
-      />
-      <DropdownMenuContent align="start" className="w-72">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Create branch"
+                  disabled={props.disabled || !ready || pending}
+                >
+                  <GitBranchIcon className="size-3.5" />
+                </Button>
+              }
+            />
+          }
+        />
+        <TooltipPopup side="bottom">Create branch</TooltipPopup>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="w-72">
         {TASK_BRANCH_PREFIXES.map((prefix) => (
           <DropdownMenuItem key={prefix} onClick={() => createBranch(prefix)}>
             <span className="font-medium">{prefix}</span>

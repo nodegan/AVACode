@@ -1,13 +1,25 @@
-import type { EnvironmentId, Task, TaskStatusCategory, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  Task,
+  TaskAttachment,
+  TaskStatusCategory,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
+  ArrowUpRightIcon,
+  EllipsisIcon,
   ExternalLinkIcon,
   Link2Icon,
-  LinkIcon,
   MessageSquarePlusIcon,
   PanelRightIcon,
+  PaperclipIcon,
   SquareCheckBigIcon,
+  Trash2Icon,
+  UnlinkIcon,
 } from "lucide-react";
-import { useMemo } from "react";
+import type { ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -21,11 +33,17 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { toastManager } from "~/components/ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useComposerHandleContext } from "~/composerHandleContext";
+import { usePreparedConnection } from "~/state/session";
 import { cn } from "~/lib/utils";
 
+import { ExpandedImageDialog } from "../chat/ExpandedImageDialog";
+import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
 import { CreateTaskBranchButton } from "./CreateTaskBranchButton";
+import { fetchTaskAttachments } from "./taskApi";
 export function statusTone(status: TaskStatusCategory): string {
   switch (status) {
     case "done":
@@ -106,8 +124,170 @@ function extractImageUrls(description: string): string[] {
   return [...urls];
 }
 
+const ATTACHMENT_IMAGE_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "avif",
+  "svg",
+  "bmp",
+  "heic",
+]);
+
+function isImageAttachment(attachment: TaskAttachment): boolean {
+  const extension = attachment.extension?.toLowerCase().replace(/^\./, "") ?? "";
+  if (ATTACHMENT_IMAGE_EXTENSIONS.has(extension)) return true;
+  const filename = attachment.url.split(/[?#]/)[0] ?? "";
+  const match = /\.([a-z0-9]+)$/i.exec(filename);
+  return match !== null && ATTACHMENT_IMAGE_EXTENSIONS.has(match[1]?.toLowerCase() ?? "");
+}
+
+function formatAttachmentSize(size: number | null): string | null {
+  if (size === null || !Number.isFinite(size) || size <= 0) return null;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let unitIndex = 0;
+  let value = size;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const rounded = unitIndex === 0 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${units[unitIndex]}`;
+}
+
+type AttachmentsState =
+  | { readonly status: "loading" }
+  | { readonly status: "error" }
+  | { readonly status: "ready"; readonly attachments: ReadonlyArray<TaskAttachment> };
+
+/**
+ * Files added to the task in ClickUp, fetched on demand when the detail view
+ * opens (sync skips them to avoid a request per task). Manual tasks render
+ * nothing.
+ */
+function TaskAttachmentsSection(props: TaskDetailsBodyProps) {
+  const { task } = props;
+  const prepared = usePreparedConnection(props.environmentId ?? null);
+  const isClickUpTask = task.source === "clickup" && task.externalTaskId !== null;
+  const [state, setState] = useState<AttachmentsState>({ status: "loading" });
+  const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+
+  useEffect(() => {
+    if (!isClickUpTask || prepared._tag === "None") return;
+    let cancelled = false;
+    setState({ status: "loading" });
+    fetchTaskAttachments(prepared.value, task.id)
+      .then((result) => {
+        if (!cancelled) setState({ status: "ready", attachments: result.attachments });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isClickUpTask, prepared, task.id]);
+
+  if (!isClickUpTask || prepared._tag === "None") return null;
+
+  const imageAttachments: TaskAttachment[] = [];
+  const fileAttachments: TaskAttachment[] = [];
+  if (state.status === "ready") {
+    for (const attachment of state.attachments) {
+      (isImageAttachment(attachment) ? imageAttachments : fileAttachments).push(attachment);
+    }
+  }
+
+  return (
+    <>
+      <div className="space-y-1">
+        <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          Attachments
+        </h5>
+        {state.status === "loading" ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : state.status === "error" ? (
+          <p className="text-xs text-destructive">Failed to load attachments.</p>
+        ) : state.attachments.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No attachments.</p>
+        ) : (
+          <div className="space-y-2">
+            {imageAttachments.length > 0 ? (
+              <div className="grid grid-cols-3 gap-2">
+                {imageAttachments.map((attachment, index) => (
+                  <button
+                    key={attachment.id}
+                    type="button"
+                    title={attachment.title}
+                    onClick={() =>
+                      setExpandedImage({
+                        images: imageAttachments.map((image) => ({
+                          src: image.url,
+                          name: image.title,
+                        })),
+                        index,
+                      })
+                    }
+                    className="block cursor-zoom-in overflow-hidden rounded-lg border border-border/70"
+                  >
+                    <img
+                      src={attachment.thumbnailUrl ?? attachment.url}
+                      alt={attachment.title}
+                      loading="lazy"
+                      className="h-24 w-full object-cover transition-transform hover:scale-105"
+                    />
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {fileAttachments.length > 0 ? (
+              <ul className="space-y-1">
+                {fileAttachments.map((attachment) => {
+                  const size = formatAttachmentSize(attachment.size);
+                  return (
+                    <li key={attachment.id}>
+                      <a
+                        href={attachment.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex min-w-0 items-center gap-2 rounded-lg border border-border/70 px-2 py-1.5 text-sm hover:bg-accent/40"
+                      >
+                        <PaperclipIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 truncate">{attachment.title}</span>
+                        {size ? (
+                          <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                            {size}
+                          </span>
+                        ) : null}
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+          </div>
+        )}
+      </div>
+      {expandedImage
+        ? createPortal(
+            <ExpandedImageDialog
+              key={`${expandedImage.images[expandedImage.index]?.src ?? "image"}:${expandedImage.index}`}
+              preview={expandedImage}
+              onClose={() => setExpandedImage(null)}
+            />,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
 export interface TaskDetailsBodyProps {
   task: Task;
+  /** Environment context lets the detail body fetch ClickUp attachments. */
+  environmentId?: EnvironmentId | undefined;
 }
 
 /** The scrollable task detail content shared by the dialog and the tasks panel view. */
@@ -178,6 +358,7 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
           </div>
         ) : null}
       </div>
+      <TaskAttachmentsSection task={task} environmentId={props.environmentId} />
       <div className="space-y-1">
         <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           Details
@@ -226,7 +407,7 @@ export interface TaskCommentComposerProps {
 export function TaskCommentComposer(props: TaskCommentComposerProps) {
   const { task } = props;
   return (
-    <div className="flex gap-2">
+    <div className="flex items-center gap-2">
       <Input
         value={props.commentDraft}
         onChange={(event) => props.onCommentDraftChange(event.target.value)}
@@ -234,7 +415,7 @@ export function TaskCommentComposer(props: TaskCommentComposerProps) {
           if (event.key === "Enter") props.onAddComment();
         }}
         placeholder="Add a local comment"
-        className="h-8 sm:h-7"
+        className="h-9 sm:h-8"
       />
       <Button
         size="sm"
@@ -260,12 +441,40 @@ export interface TaskDetailsActionsProps {
   onNavigateThread?: (() => void) | undefined;
 }
 
-/** Thread wiring actions, rendered by the dialog footer and the panel view. */
+/** Quiet icon control for the detail header toolbar; the label rides a tooltip. */
+function HeaderIconButton(props: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean | undefined;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label={props.label}
+            onClick={props.onClick}
+            disabled={props.disabled}
+          >
+            {props.children}
+          </Button>
+        }
+      />
+      <TooltipPopup side="bottom">{props.label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/** Thread wiring actions, rendered as a compact toolbar in the detail header. */
 export function TaskDetailsActions(props: TaskDetailsActionsProps) {
   const { task } = props;
   const linkedThreadId = task.linkedThreadId;
   const isLinkedToCurrentThread =
     props.activeThreadId !== null && linkedThreadId === props.activeThreadId;
+  const isLinkBusy = props.busyKey === `task-link:${task.id}`;
   const composerRef = useComposerHandleContext();
 
   const addToThread = () => {
@@ -289,77 +498,77 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
     }
   };
 
+  // One primary action depends on the link state; everything else stays quiet.
+  const onLink = props.onLink;
+  const environmentId = props.environmentId;
+  const showCreateThread = linkedThreadId === null && props.onCreateThread !== undefined;
+  const showOpenThread = linkedThreadId !== null && props.onNavigateThread !== undefined;
+  const showLinkCurrent = onLink !== undefined && !isLinkedToCurrentThread;
+  const showBranch = environmentId !== undefined && props.activeThreadId !== null;
+  const showUnlink = linkedThreadId !== null && props.onUnlink !== undefined;
+  const showDelete = props.onDelete !== undefined && task.source === "manual";
+  const showOverflow = showUnlink || showDelete;
+
   return (
-    <>
-      {props.onDelete !== undefined && task.source === "manual" ? (
-        <Button
-          variant="destructive-outline"
-          className="mr-auto"
-          onClick={props.onDelete}
-          disabled={props.busyKey === `task-delete:${task.id}`}
-        >
-          Delete
+    <div className="flex items-center gap-0.5">
+      {showCreateThread ? (
+        <Button size="sm" onClick={props.onCreateThread}>
+          <SquareCheckBigIcon className="size-3.5" />
+          Create thread
         </Button>
       ) : null}
-      {linkedThreadId ? (
-        <>
-          {props.onNavigateThread !== undefined ? (
-            <Button variant="outline" onClick={props.onNavigateThread}>
-              <Link2Icon className="size-3.5" />
-              Open thread
-            </Button>
-          ) : null}
-          {props.onUnlink !== undefined ? (
-            <Button
-              variant="outline"
-              onClick={props.onUnlink}
-              disabled={props.busyKey === `task-link:${task.id}`}
-            >
-              <LinkIcon className="size-3.5" />
-              Unlink
-            </Button>
-          ) : null}
-          {props.onLink !== undefined && !isLinkedToCurrentThread ? (
-            <Button
-              variant="outline"
-              onClick={props.onLink}
-              disabled={props.busyKey === `task-link:${task.id}`}
-            >
-              Link current
-            </Button>
-          ) : null}
-        </>
-      ) : props.onCreateThread !== undefined || props.onLink !== undefined ? (
-        <>
-          {props.onCreateThread !== undefined ? (
-            <Button variant="outline" onClick={props.onCreateThread}>
-              <SquareCheckBigIcon className="size-3.5" />
-              Create thread
-            </Button>
-          ) : null}
-          {props.onLink !== undefined ? (
-            <Button
-              variant="outline"
-              onClick={props.onLink}
-              disabled={props.busyKey === `task-link:${task.id}`}
-            >
-              Link current
-            </Button>
-          ) : null}
-        </>
+      {showOpenThread ? (
+        <Button size="sm" variant="ghost" onClick={props.onNavigateThread}>
+          <ArrowUpRightIcon className="size-3.5" />
+          Open thread
+        </Button>
       ) : null}
-      {props.environmentId && props.activeThreadId ? (
+      {showBranch ? (
         <CreateTaskBranchButton
           task={task}
-          environmentId={props.environmentId}
+          environmentId={environmentId}
           threadId={props.activeThreadId}
         />
       ) : null}
-      <Button variant="outline" onClick={addToThread}>
+      <HeaderIconButton label="Add to thread" onClick={addToThread}>
         <MessageSquarePlusIcon className="size-3.5" />
-        Add to thread
-      </Button>
-    </>
+      </HeaderIconButton>
+      {showLinkCurrent ? (
+        <HeaderIconButton label="Link current thread" onClick={onLink} disabled={isLinkBusy}>
+          <Link2Icon className="size-3.5" />
+        </HeaderIconButton>
+      ) : null}
+      {showOverflow ? (
+        <>
+          <div role="presentation" className="mx-1 h-4 w-px bg-border" />
+          <Menu>
+            <MenuTrigger
+              render={<Button size="icon-sm" variant="ghost" aria-label="More actions" />}
+            >
+              <EllipsisIcon className="size-4" />
+            </MenuTrigger>
+            <MenuPopup align="end">
+              {showUnlink ? (
+                <MenuItem onClick={props.onUnlink} disabled={isLinkBusy}>
+                  <UnlinkIcon />
+                  Unlink from thread
+                </MenuItem>
+              ) : null}
+              {showDelete ? (
+                <MenuItem
+                  variant="destructive"
+                  onClick={props.onDelete}
+                  disabled={props.busyKey === `task-delete:${task.id}`}
+                >
+                  <Trash2Icon />
+                  Delete task
+                </MenuItem>
+              ) : null}
+            </MenuPopup>
+          </Menu>
+        </>
+      ) : null}
+    </div>
   );
 }
 
@@ -395,20 +604,47 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
     <Dialog open onOpenChange={props.onOpenChange}>
       <DialogPopup className="max-w-3xl">
         <DialogHeader>
-          <div className="flex items-start justify-between gap-2 pr-9">
+          <div className="flex items-center justify-between gap-2 pr-9">
             <DialogTitle className="text-balance">{task.title}</DialogTitle>
-            {props.onShowInPanel ? (
-              <Button size="sm" variant="ghost" className="shrink-0" onClick={props.onShowInPanel}>
-                <PanelRightIcon className="size-3.5" />
-                Show in panel
-              </Button>
-            ) : null}
+            <div className="flex shrink-0 items-center gap-1">
+              {hasThreadActions ? (
+                <TaskDetailsActions
+                  task={task}
+                  activeThreadId={props.activeThreadId}
+                  environmentId={props.environmentId}
+                  busyKey={props.busyKey}
+                  onDelete={props.onDelete}
+                  onLink={props.onLink}
+                  onUnlink={props.onUnlink}
+                  onCreateThread={props.onCreateThread}
+                  onNavigateThread={props.onNavigateThread}
+                />
+              ) : null}
+              {props.onShowInPanel ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className="shrink-0"
+                        aria-label="Show in panel"
+                        onClick={props.onShowInPanel}
+                      >
+                        <PanelRightIcon className="size-3.5" />
+                      </Button>
+                    }
+                  />
+                  <TooltipPopup side="bottom">Show in panel</TooltipPopup>
+                </Tooltip>
+              ) : null}
+            </div>
           </div>
         </DialogHeader>
         <DialogPanel className="space-y-4">
-          <TaskDetailsBody task={task} />
+          <TaskDetailsBody task={task} environmentId={props.environmentId} />
         </DialogPanel>
-        <DialogFooter className="flex-col gap-3 sm:flex-col">
+        <DialogFooter>
           <TaskCommentComposer
             task={task}
             busyKey={props.busyKey}
@@ -416,21 +652,6 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
             onCommentDraftChange={props.onCommentDraftChange}
             onAddComment={props.onAddComment}
           />
-          {hasThreadActions ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <TaskDetailsActions
-                task={task}
-                activeThreadId={props.activeThreadId}
-                environmentId={props.environmentId}
-                busyKey={props.busyKey}
-                onDelete={props.onDelete}
-                onLink={props.onLink}
-                onUnlink={props.onUnlink}
-                onCreateThread={props.onCreateThread}
-                onNavigateThread={props.onNavigateThread}
-              />
-            </div>
-          ) : null}
         </DialogFooter>
       </DialogPopup>
     </Dialog>

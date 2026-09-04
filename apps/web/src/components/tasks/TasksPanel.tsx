@@ -855,12 +855,13 @@ export function TasksPanel(props: {
                   {detailTask?.title ?? ""}
                 </h3>
               </div>
+              {detailTask ? taskDetailsActions(detailTask) : null}
             </section>
 
             {error ? <p className="text-xs text-destructive">{error}</p> : null}
 
             {detailTask ? (
-              <TaskDetailsBody task={detailTask} />
+              <TaskDetailsBody task={detailTask} environmentId={props.environmentId} />
             ) : detailLoading ? (
               <div className="flex justify-center py-6">
                 <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
@@ -871,7 +872,7 @@ export function TasksPanel(props: {
           </div>
         </ScrollArea>
         {detailTask ? (
-          <div className="space-y-2 border-t bg-muted/72 p-4">
+          <div className="border-t bg-muted/72 p-4">
             <TaskCommentComposer
               task={detailTask}
               busyKey={busyKey}
@@ -881,9 +882,6 @@ export function TasksPanel(props: {
               }}
               onAddComment={() => addComment(detailTask.id)}
             />
-            <div className="flex flex-wrap items-center gap-2">
-              {taskDetailsActions(detailTask)}
-            </div>
           </div>
         ) : null}
       </div>

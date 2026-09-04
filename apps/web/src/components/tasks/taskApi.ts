@@ -7,6 +7,7 @@ import { environmentEndpointUrl } from "@t3tools/client-runtime/environment";
 import { ManagedRelay } from "@t3tools/client-runtime/relay";
 import type {
   Task,
+  TaskAttachmentsResult,
   TaskId,
   TaskLinksResult,
   TaskPanel,
@@ -128,6 +129,22 @@ export async function fetchThreadTask(
 ): Promise<Task | null> {
   const result = await fetchTasksQuery(prepared, { linkedThreadId: threadId, pageSize: 1 });
   return result.tasks[0] ?? null;
+}
+
+export async function fetchTaskAttachments(
+  prepared: PreparedConnection,
+  taskId: TaskId,
+): Promise<TaskAttachmentsResult> {
+  const requestUrl = environmentEndpointUrl(
+    prepared.httpBaseUrl,
+    `/api/tasks/attachments/${taskId}`,
+  );
+  return runTasksRequest(prepared, requestUrl, "GET", (client, headers) =>
+    client.tasks.taskAttachments({
+      params: { taskId },
+      headers,
+    }),
+  );
 }
 
 export async function setTaskLinkedThread(

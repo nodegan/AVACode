@@ -15,7 +15,7 @@ import {
 import * as ServerSecretStoreModule from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
-import { TaskService } from "./TaskService.ts";
+import { mapClickUpAttachments, TaskService } from "./TaskService.ts";
 import { TaskServiceLive } from "./TaskService.ts";
 
 const ConfigLayer = Layer.fresh(
@@ -54,14 +54,46 @@ const clickUpPages = [
   },
 ];
 
+/** Attachment payload served by Get Task for any single-task /task/:id request. */
+const clickUpAttachments = [
+  {
+    id: "att-1",
+    title: "screenshot.png",
+    extension: "png",
+    size: 2048,
+    url: "https://attachments.clickup.com/screenshot.png",
+    thumbnail_small: "https://attachments.clickup.com/screenshot-small.png",
+    thumbnail_large: "https://attachments.clickup.com/screenshot-large.png",
+    date: "1567780450202",
+  },
+  {
+    id: "att-2",
+    title: null,
+    extension: "pdf",
+    size: 102400,
+    url: "https://attachments.clickup.com/spec.pdf",
+    date: null,
+  },
+  { id: "  ", url: null, title: "orphan.png" },
+];
+
 const ClickUpStubLayer = Layer.succeed(
   HttpClient.HttpClient,
   HttpClient.make((request) => {
     const urlOption = HttpClientRequest.toUrl(request);
     const url = urlOption._tag === "Some" ? urlOption.value.toString() : "";
+    // The single-task URL ("…/task/<id>") is distinct from the list endpoint
+    // ("…/team/<id>/task?page=…") by the trailing slash.
     const body: unknown = url.endsWith("/team")
       ? { teams: [{ id: "4679239", name: "Test Workspace" }] }
-      : (clickUpPages[pageForUrl(url)] ?? { tasks: [], last_page: true });
+      : /\/task\/[^/?]+/.test(url)
+        ? {
+            id: "900000",
+            name: "With files",
+            status: { status: "to do", type: "open" },
+            attachments: clickUpAttachments,
+          }
+        : (clickUpPages[pageForUrl(url)] ?? { tasks: [], last_page: true });
     return Effect.succeed(
       HttpClientResponse.fromWeb(
         request,
@@ -497,5 +529,74 @@ it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the backgro
     const loginBug = byFolder.tasks.find((task) => task.title === "Fix login bug");
     assert.ok(loginBug);
     assert.strictEqual(loginBug.createdAt, DateTime.formatIso(DateTime.makeUnsafe(1567700000000)));
+  }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
+);
+
+it.effect("mapClickUpAttachments normalizes the ClickUp attachment payload", () =>
+  Effect.sync(() => {
+    const attachments = mapClickUpAttachments([
+      {
+        id: "att-1",
+        title: "screenshot.png",
+        extension: "png",
+        size: "2048",
+        url: "https://attachments.clickup.com/screenshot.png",
+        thumbnail_small: "https://attachments.clickup.com/screenshot-small.png",
+        date: "1567780450202",
+      },
+      {
+        id: "att-2",
+        title: null,
+        extension: null,
+        size: null,
+        url: "https://attachments.clickup.com/spec.pdf",
+      },
+      { id: " ", url: "https://attachments.clickup.com/orphan.png", title: "orphan.png" },
+    ]);
+    assert.strictEqual(attachments.length, 2);
+    assert.deepStrictEqual(attachments[0], {
+      id: "att-1",
+      title: "screenshot.png",
+      extension: "png",
+      size: 2048,
+      url: "https://attachments.clickup.com/screenshot.png",
+      thumbnailUrl: "https://attachments.clickup.com/screenshot-small.png",
+      createdAt: DateTime.formatIso(DateTime.makeUnsafe(1567780450202)),
+    });
+    // A missing title falls back to the URL's file name.
+    assert.strictEqual(attachments[1]?.title, "spec.pdf");
+    assert.strictEqual(attachments[1]?.thumbnailUrl, null);
+    assert.strictEqual(attachments[1]?.size, null);
+  }),
+);
+
+it.live("getTaskAttachments maps ClickUp attachments for a synced task", () =>
+  Effect.gen(function* () {
+    yield* seedTasks([
+      { title: "With files", listId: "list-a", listName: "Alpha" },
+      { title: "Manual" },
+    ]);
+    const service = yield* TaskService;
+    const clickupId = TaskId.make("aaaaaaaa-aaaa-4aaa-8aaa-000000000000");
+    const manualId = TaskId.make("aaaaaaaa-aaaa-4aaa-8aaa-000000000001");
+
+    // Manual tasks never touch the network and answer empty.
+    const manualEmpty = yield* service.getTaskAttachments(manualId);
+    assert.deepStrictEqual(manualEmpty, { attachments: [] });
+
+    // Without a token there is nothing to ask either.
+    const tokenless = yield* service.getTaskAttachments(clickupId);
+    assert.deepStrictEqual(tokenless, { attachments: [] });
+
+    yield* service.setClickUpToken("pk_test_token");
+    const result = yield* service.getTaskAttachments(clickupId);
+    assert.strictEqual(result.attachments.length, 2);
+    const [image, file] = result.attachments;
+    assert.strictEqual(image?.title, "screenshot.png");
+    assert.strictEqual(image?.thumbnailUrl, "https://attachments.clickup.com/screenshot-large.png");
+    assert.strictEqual(image?.size, 2048);
+    assert.strictEqual(file?.title, "spec.pdf");
+    assert.strictEqual(file?.thumbnailUrl, null);
+    assert.strictEqual(file?.size, 102400);
   }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
 );

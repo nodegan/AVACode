@@ -5,6 +5,8 @@ import {
   type ClickUpWorkspaceSummary,
   DeleteTaskInput,
   type Task,
+  TaskAttachment,
+  type TaskAttachmentsResult,
   type TaskComment,
   TaskComment as TaskCommentSchema,
   TaskFacets,
@@ -126,11 +128,25 @@ interface ClickUpTaskResponse {
     readonly name?: string | null;
     readonly hidden?: boolean | null;
   } | null;
+  // Get Task returns attachments when present; the task list endpoint omits
+  // them, which is why the detail view fetches them per task.
+  readonly attachments?: ReadonlyArray<ClickUpAttachmentResponse>;
 }
 
 interface ClickUpTaskListResponse {
   readonly tasks?: ReadonlyArray<ClickUpTaskResponse>;
   readonly last_page?: boolean;
+}
+
+interface ClickUpAttachmentResponse {
+  readonly id?: string | number | null;
+  readonly title?: string | null;
+  readonly extension?: string | null;
+  readonly size?: number | string | null;
+  readonly url?: string | null;
+  readonly thumbnail_small?: string | null;
+  readonly thumbnail_large?: string | null;
+  readonly date?: string | number | null;
 }
 
 export class TaskServiceError extends Schema.TaggedErrorClass<TaskServiceError>()(
@@ -297,6 +313,37 @@ export function clickUpFolderRef(task: ClickUpTaskResponse): {
 const decodeCommentRow = Schema.decodeSync(TaskCommentSchema);
 const decodeTaskRow = Schema.decodeSync(TaskSchema);
 const decodeFacets = Schema.decodeSync(TaskFacets);
+const decodeAttachment = Schema.decodeSync(TaskAttachment);
+
+/**
+ * Normalize ClickUp's attachment payload for the detail view. Entries without
+ * an id or download URL are dropped; a missing title falls back to the URL's
+ * file name so files always render something meaningful.
+ */
+export function mapClickUpAttachments(
+  attachments: ReadonlyArray<ClickUpAttachmentResponse>,
+): Array<TaskAttachment> {
+  const mapped: Array<TaskAttachment> = [];
+  for (const attachment of attachments) {
+    const id = attachment.id == null ? "" : String(attachment.id).trim();
+    const url = attachment.url?.trim() ?? "";
+    if (id.length === 0 || url.length === 0) continue;
+    const size = attachment.size == null ? null : Number(attachment.size);
+    mapped.push(
+      decodeAttachment({
+        id,
+        title: attachment.title?.trim() || url.split("/").pop()?.trim() || "Attachment",
+        extension: attachment.extension?.trim() || null,
+        size: size !== null && Number.isFinite(size) ? size : null,
+        url,
+        thumbnailUrl:
+          attachment.thumbnail_large?.trim() || attachment.thumbnail_small?.trim() || null,
+        createdAt: parseClickUpTimestamp(attachment.date),
+      }),
+    );
+  }
+  return mapped;
+}
 
 function mapCommentRow(row: TaskCommentRow): TaskComment {
   return decodeCommentRow({
@@ -346,6 +393,9 @@ export class TaskService extends Context.Service<
     readonly updateTask: (input: UpdateTaskInput) => Effect.Effect<Task, TaskServiceFailure>;
     readonly deleteTask: (input: DeleteTaskInput) => Effect.Effect<void, TaskServiceFailure>;
     readonly addComment: (input: AddTaskCommentInput) => Effect.Effect<Task, TaskServiceFailure>;
+    readonly getTaskAttachments: (
+      taskId: TaskId,
+    ) => Effect.Effect<TaskAttachmentsResult, TaskServiceFailure>;
     readonly setClickUpToken: (token: string) => Effect.Effect<void, TaskServiceFailure>;
     readonly clearClickUpToken: () => Effect.Effect<void, TaskServiceFailure>;
     readonly getClickUpStatus: () => Effect.Effect<ClickUpConnectionStatus, TaskServiceFailure>;
@@ -999,6 +1049,33 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const getTaskAttachments: TaskService["Service"]["getTaskAttachments"] = (taskId) =>
+    Effect.gen(function* () {
+      const row = yield* loadTaskRowById(taskId);
+      // Manual tasks have nothing on ClickUp to ask for; answer empty without
+      // a network round trip (and without a token).
+      if (row.source !== "clickup" || !row.externalTaskId) {
+        return { attachments: [] } satisfies TaskAttachmentsResult;
+      }
+      const token = yield* getClickUpToken;
+      if (!token) {
+        return { attachments: [] } satisfies TaskAttachmentsResult;
+      }
+      // ClickUp has no "list attachments" route; Get Task returns them when
+      // present, so the detail view fetches the task itself.
+      const payload = yield* fetchJson<ClickUpTaskResponse>({
+        url: `https://api.clickup.com/api/v2/task/${encodeURIComponent(row.externalTaskId)}`,
+        token,
+      });
+      return {
+        attachments: mapClickUpAttachments(payload.attachments ?? []),
+      } satisfies TaskAttachmentsResult;
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.getTaskAttachments", "Failed to load task attachments", cause),
+      ),
+    );
+
   const setClickUpToken: TaskService["Service"]["setClickUpToken"] = (token) => {
     const normalized = normalizeClickUpToken(token);
     if (normalized.length === 0) {
@@ -1213,6 +1290,7 @@ const make = Effect.gen(function* () {
     updateTask,
     deleteTask,
     addComment,
+    getTaskAttachments,
     setClickUpToken,
     clearClickUpToken,
     getClickUpStatus,

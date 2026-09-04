@@ -36,6 +36,26 @@ export const TaskComment = Schema.Struct({
 });
 export type TaskComment = typeof TaskComment.Type;
 
+export const TaskAttachment = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  extension: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  size: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  url: TrimmedNonEmptyString,
+  thumbnailUrl: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  createdAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+});
+export type TaskAttachment = typeof TaskAttachment.Type;
+
+export const TaskAttachmentsResult = Schema.Struct({
+  attachments: Schema.Array(TaskAttachment).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type TaskAttachmentsResult = typeof TaskAttachmentsResult.Type;
+
 export const Task = Schema.Struct({
   id: TaskId,
   source: TaskSource,

@@ -91,6 +91,16 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "taskAttachments",
+        Effect.fn("environment.tasks.taskAttachments")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* tasks
+            .getTaskAttachments(args.params.taskId)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
+        }),
+      )
+      .handle(
         "setClickUpToken",
         Effect.fn("environment.tasks.setClickUpToken")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);

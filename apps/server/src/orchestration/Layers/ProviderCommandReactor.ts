@@ -29,6 +29,8 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
+import { TaskService } from "../../tasks/TaskService.ts";
+import { buildLinkedTaskContextBlock } from "../../tasks/TaskTurnContext.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
@@ -320,6 +322,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const taskService = yield* TaskService;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -687,7 +690,7 @@ const make = Effect.gen(function* () {
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange
       ) {
-        return existingSessionThreadId;
+        return { sessionThreadId: existingSessionThreadId, sessionHistoryFresh: false };
       }
 
       const resumeCursor = shouldRestartForModelChange
@@ -724,12 +727,33 @@ const make = Effect.gen(function* () {
         cwd: restartedSession.cwd,
       });
       yield* bindSessionToThread(restartedSession);
-      return restartedSession.threadId;
+      return {
+        sessionThreadId: restartedSession.threadId,
+        // A restart without a resume cursor starts a provider session with no
+        // prior conversation history.
+        sessionHistoryFresh: resumeCursor === undefined,
+      };
     }
 
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
-    return startedSession.threadId;
+    return { sessionThreadId: startedSession.threadId, sessionHistoryFresh: true };
+  });
+
+  // Best-effort: a linked task enriches the turn but must never block it.
+  const loadLinkedTaskContext = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const task = yield* taskService
+      .queryTasks({ filter: { linkedThreadId: threadId, page: 1, pageSize: 1 } })
+      .pipe(
+        Effect.map((result) => result.tasks[0] ?? null),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider command reactor failed to load linked task context", {
+            threadId,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(null)),
+        ),
+      );
+    return task === null ? null : buildLinkedTaskContextBlock(task);
   });
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
@@ -746,14 +770,25 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${input.threadId}' was not found in read model.`),
       );
     }
-    yield* ensureSessionForThread(input.threadId, input.createdAt, {
+    const sessionStart = yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    // A thread with a linked task briefs the model automatically on the first
+    // turn of a provider session with no prior history. If the user already
+    // attached task context in the composer, their block wins.
+    const linkedTaskContext =
+      sessionStart.sessionHistoryFresh && !input.messageText.includes("<task_context>")
+        ? yield* loadLinkedTaskContext(input.threadId)
+        : null;
+    const normalizedInput = toNonEmptyProviderInput(
+      linkedTaskContext === null
+        ? input.messageText
+        : `${input.messageText}\n\n${linkedTaskContext}`,
+    );
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
