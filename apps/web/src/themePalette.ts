@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 export const T3_CHAT_THEME_ID = "t3-chat" as const;
-export const T3_CHAT_THEME_LABEL = "T3 Chat";
+export const T3_CHAT_THEME_LABEL = "Plum";
 export const GROVE_THEME_ID = "grove" as const;
 export const GROVE_THEME_LABEL = "Grove";
 export const OCEAN_THEME_ID = "ocean" as const;
