@@ -85,9 +85,6 @@ export type TaskSyncConfig = typeof TaskSyncConfig.Type;
 
 export const TaskClickUpState = Schema.Struct({
   tokenConfigured: Schema.Boolean,
-  availableWorkspaces: Schema.Array(ClickUpWorkspaceSummary).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
   syncConfig: Schema.NullOr(TaskSyncConfig).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   lastSyncAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   lastSyncError: Schema.NullOr(TrimmedNonEmptyString).pipe(
@@ -145,6 +142,7 @@ export type TaskPanel = typeof TaskPanel.Type;
 export const TaskQueryFilter = Schema.Struct({
   listIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   folderIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  taskIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   statuses: Schema.optional(Schema.Array(TaskStatusCategory)),
   assignees: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   linkedThreadId: Schema.optional(ThreadId),
@@ -200,5 +198,13 @@ export type SetClickUpTokenInput = typeof SetClickUpTokenInput.Type;
 
 export const ClickUpConnectionStatus = Schema.Struct({
   tokenConfigured: Schema.Boolean,
+  /** Workspace the sync is bound to, or the token's first workspace before the first sync. */
+  workspaceName: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  lastSyncAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  lastSyncError: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
 });
 export type ClickUpConnectionStatus = typeof ClickUpConnectionStatus.Type;

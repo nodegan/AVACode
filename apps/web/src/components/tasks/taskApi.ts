@@ -176,19 +176,3 @@ export async function syncClickUpTasks(prepared: PreparedConnection): Promise<vo
     }),
   );
 }
-
-export async function createManualTask(
-  prepared: PreparedConnection,
-  input: { title: string; description?: string },
-): Promise<void> {
-  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/manual");
-  await runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
-    client.tasks.createManual({
-      headers,
-      payload: {
-        title: input.title,
-        ...(input.description ? { description: input.description } : {}),
-      },
-    }),
-  );
-}

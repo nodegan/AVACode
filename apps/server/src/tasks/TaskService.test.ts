@@ -393,7 +393,67 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       assert.ok(links.links.every((link) => link.threadId === threadA));
     }).pipe(Effect.provide(TestLayers)),
   );
+
+  it.effect("queryTasks filters by task ids regardless of list scope", () =>
+    Effect.gen(function* () {
+      yield* seedTasks([
+        { title: "A", listId: "list-a", listName: "Alpha" },
+        { title: "B", listId: "list-a", listName: "Alpha" },
+        { title: "C", listId: "list-b", listName: "Beta" },
+        { title: "D" },
+      ]);
+
+      const service = yield* TaskService;
+      const secondId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${"1".padStart(12, "0")}`);
+      const fourthId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${"3".padStart(12, "0")}`);
+
+      const byIds = yield* service.queryTasks({
+        filter: { taskIds: [secondId, fourthId] },
+      });
+      assert.strictEqual(byIds.total, 2);
+      assert.deepStrictEqual(byIds.tasks.map((task) => task.title).sort(), ["B", "D"]);
+
+      const unknownOnly = yield* service.queryTasks({
+        filter: { taskIds: [TaskId.make("does-not-exist")] },
+      });
+      assert.strictEqual(unknownOnly.total, 0);
+    }).pipe(Effect.provide(TestLayers)),
+  );
 });
+
+it.live("getClickUpStatus reports workspace, last sync, and last error", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const service = yield* TaskService;
+
+    const bareStatus = yield* service.getClickUpStatus();
+    assert.deepStrictEqual(bareStatus, {
+      tokenConfigured: false,
+      workspaceName: null,
+      lastSyncAt: null,
+      lastSyncError: null,
+    });
+
+    yield* service.setClickUpToken("pk_test_token");
+    // No sync row yet: the account name falls back to the token's first workspace.
+    const tokenOnlyStatus = yield* service.getClickUpStatus();
+    assert.strictEqual(tokenOnlyStatus.tokenConfigured, true);
+    assert.strictEqual(tokenOnlyStatus.workspaceName, "Test Workspace");
+    assert.strictEqual(tokenOnlyStatus.lastSyncAt, null);
+    assert.strictEqual(tokenOnlyStatus.lastSyncError, null);
+
+    const syncedAt = DateTime.formatIso(DateTime.makeUnsafe(1567700000000));
+    yield* sql`
+      INSERT INTO task_sync_config (id, provider, workspace_id, workspace_name, list_ids_json, last_sync_at, last_sync_error)
+      VALUES (1, 'clickup', '4679239', 'Persisted Workspace', '[]', ${syncedAt}, 'ClickUp exploded')
+    `;
+    const persistedStatus = yield* service.getClickUpStatus();
+    assert.strictEqual(persistedStatus.tokenConfigured, true);
+    assert.strictEqual(persistedStatus.workspaceName, "Persisted Workspace");
+    assert.strictEqual(persistedStatus.lastSyncAt, syncedAt);
+    assert.strictEqual(persistedStatus.lastSyncError, "ClickUp exploded");
+  }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
+);
 
 it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the background", () =>
   Effect.gen(function* () {

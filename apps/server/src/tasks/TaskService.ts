@@ -82,6 +82,7 @@ interface TaskSyncConfigRow {
 interface NormalizedTaskQueryFilter {
   readonly listIds: ReadonlyArray<string>;
   readonly folderIds: ReadonlyArray<string>;
+  readonly taskIds: ReadonlyArray<string>;
   readonly statuses: ReadonlyArray<TaskStatusCategory>;
   readonly assignees: ReadonlyArray<string>;
   readonly linkedThreadId: string | null;
@@ -484,6 +485,7 @@ const make = Effect.gen(function* () {
     return {
       listIds: dedupe(filter?.listIds ?? []),
       folderIds: dedupe(filter?.folderIds ?? []),
+      taskIds: dedupe(filter?.taskIds ?? []),
       statuses: [...new Set(filter?.statuses ?? [])],
       assignees: dedupe(filter?.assignees ?? []),
       linkedThreadId: filter?.linkedThreadId?.trim() || null,
@@ -498,13 +500,16 @@ const make = Effect.gen(function* () {
   const taskFilterFragment = (filter: NormalizedTaskQueryFilter) => {
     const clauses: Array<string | Fragment> = [];
     // A selection can name lists directly, folders (denormalized onto each
-    // synced task), or both — tasks match any of the named scopes.
+    // synced task), both, or specific tasks — any of the named scopes match.
     const listScope: Array<Fragment> = [];
     if (filter.listIds.length > 0) {
       listScope.push(sql.in("external_list_id", filter.listIds));
     }
     if (filter.folderIds.length > 0) {
       listScope.push(sql.in("external_folder_id", filter.folderIds));
+    }
+    if (filter.taskIds.length > 0) {
+      listScope.push(sql.in("task_id", filter.taskIds));
     }
     const listScopeClause =
       listScope.length === 0 ? null : listScope.length === 1 ? listScope[0] : sql.or(listScope);
@@ -788,18 +793,16 @@ const make = Effect.gen(function* () {
 
   const getPanel: TaskService["Service"]["getPanel"] = () =>
     Effect.gen(function* () {
+      // Fully local reads: clients poll the panel, so no ClickUp network calls
+      // live here. Workspace discovery only happens in sync and status paths.
       const [facets, syncRow, token] = yield* Effect.all([
         loadTaskFacets(),
         loadSyncConfigRow(),
         getClickUpToken,
       ]);
-      const workspaces = token
-        ? yield* fetchClickUpWorkspaces(token).pipe(Effect.orElseSucceed(() => []))
-        : [];
       return {
         clickup: {
           tokenConfigured: token !== null,
-          availableWorkspaces: workspaces,
           syncConfig: mapSyncConfig(syncRow),
           lastSyncAt: syncRow?.lastSyncAt ?? null,
           lastSyncError: syncRow?.lastSyncError ?? null,
@@ -1030,8 +1033,22 @@ const make = Effect.gen(function* () {
 
   const getClickUpStatus: TaskService["Service"]["getClickUpStatus"] = () =>
     Effect.gen(function* () {
-      const token = yield* getClickUpToken;
-      return { tokenConfigured: token !== null };
+      const [token, syncRow] = yield* Effect.all([getClickUpToken, loadSyncConfigRow()]);
+      let workspaceName = syncRow?.workspaceName?.trim() || null;
+      if (token && !workspaceName) {
+        // Before the first sync persists a workspace, name the account from
+        // the token's workspaces. Best effort: status still renders without it.
+        const workspaces = yield* fetchClickUpWorkspaces(token).pipe(
+          Effect.orElseSucceed(() => []),
+        );
+        workspaceName = workspaces[0]?.name ?? null;
+      }
+      return {
+        tokenConfigured: token !== null,
+        workspaceName,
+        lastSyncAt: syncRow?.lastSyncAt ?? null,
+        lastSyncError: syncRow?.lastSyncError ?? null,
+      } satisfies ClickUpConnectionStatus;
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError("tasks.getClickUpStatus", "Failed to read ClickUp status", cause),

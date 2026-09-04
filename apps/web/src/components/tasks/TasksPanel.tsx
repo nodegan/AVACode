@@ -1,5 +1,6 @@
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type {
   Task,
   TaskId,
@@ -24,15 +25,16 @@ import {
   Loader2Icon,
   MessageSquareIcon,
   RefreshCwIcon,
+  SettingsIcon,
   SquareCheckBigIcon,
   UserIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { formatRelativeTimeLabel } from "../../timestampFormat";
 import {
   addTaskComment,
-  createManualTask,
   fetchTaskPanel,
   fetchTasksQuery,
   setTaskLinkedThread,
@@ -45,7 +47,9 @@ import {
   TaskCommentComposer,
   TaskStatusBadge,
 } from "./TaskDetailsDialog";
-import { notifyTasksChanged, useTaskPanelViewRequest } from "./taskLinkStore";
+import { notifyTasksChanged, requestTaskPanelView, useTaskPanelViewRequest } from "./taskLinkStore";
+import { waitForServerThreadDetail } from "../ChatView.logic";
+import { useRelativeTimeTick } from "~/components/settings/settingsLayout";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -56,10 +60,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
-import { Textarea } from "~/components/ui/textarea";
 import { usePreparedConnection } from "~/state/session";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { newThreadId } from "~/lib/utils";
 import { cn } from "~/lib/utils";
 
@@ -71,6 +75,10 @@ interface TaskPanelThreadContext {
 }
 
 const TASKS_PAGE_SIZE = 10;
+// How often the visible view re-reads the local task store while the panel is open.
+const VIEW_POLL_INTERVAL_MS = 10_000;
+// Opening the panel on data older than this quietly starts a background sync.
+const CLICKUP_AUTO_SYNC_MAX_AGE_MS = 5 * 60_000;
 
 type ListSelection = { readonly kind: "all" } | { readonly kind: "list"; listId: string };
 
@@ -285,16 +293,18 @@ export function TasksPanel(props: {
 }) {
   const prepared = usePreparedConnection(props.environmentId);
   const navigate = useNavigate();
+  // Re-render on a slow tick so the header's relative "last synced" label stays honest.
+  useRelativeTimeTick(30_000);
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const projectId = ProjectId.make(props.projectId);
   const activeThreadId = ThreadId.make(props.activeThread.id);
   const [panel, setPanel] = useState<TaskPanel | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [manualTitle, setManualTitle] = useState("");
-  const [manualDescription, setManualDescription] = useState("");
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [detailTask, setDetailTask] = useState<Task | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const [tasksResult, setTasksResult] = useState<TaskQueryResult | null>(null);
@@ -311,23 +321,28 @@ export function TasksPanel(props: {
   const clickup = panel?.clickup ?? null;
   const tokenConfigured = clickup?.tokenConfigured ?? false;
 
-  const loadPanel = useCallback(async () => {
-    if (prepared._tag === "None") {
-      setPanel(null);
-      setLoading(false);
-      setError("Waiting for an authenticated environment connection.");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      setPanel(await fetchTaskPanel(prepared.value));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Failed to load tasks.");
-    } finally {
-      setLoading(false);
-    }
-  }, [prepared]);
+  const loadPanel = useCallback(
+    async (silent = false) => {
+      if (prepared._tag === "None") {
+        setPanel(null);
+        setLoading(false);
+        setError("Waiting for an authenticated environment connection.");
+        return;
+      }
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
+      try {
+        setPanel(await fetchTaskPanel(prepared.value));
+      } catch (cause) {
+        if (!silent) setError(cause instanceof Error ? cause.message : "Failed to load tasks.");
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [prepared],
+  );
 
   const queryFilter = useMemo<TaskQueryFilter>(
     () => ({
@@ -340,22 +355,28 @@ export function TasksPanel(props: {
     [assigneeFilter, listSelection, page, statusFilter],
   );
 
-  const loadTasks = useCallback(async () => {
-    if (prepared._tag === "None") {
-      setTasksResult(null);
-      setTasksLoading(false);
-      return;
-    }
-    setTasksLoading(true);
-    setTasksError(null);
-    try {
-      setTasksResult(await fetchTasksQuery(prepared.value, queryFilter));
-    } catch (cause) {
-      setTasksError(cause instanceof Error ? cause.message : "Failed to load tasks.");
-    } finally {
-      setTasksLoading(false);
-    }
-  }, [prepared, queryFilter]);
+  const loadTasks = useCallback(
+    async (silent = false) => {
+      if (prepared._tag === "None") {
+        setTasksResult(null);
+        setTasksLoading(false);
+        return;
+      }
+      if (!silent) {
+        setTasksLoading(true);
+        setTasksError(null);
+      }
+      try {
+        setTasksResult(await fetchTasksQuery(prepared.value, queryFilter));
+      } catch (cause) {
+        if (!silent)
+          setTasksError(cause instanceof Error ? cause.message : "Failed to load tasks.");
+      } finally {
+        if (!silent) setTasksLoading(false);
+      }
+    },
+    [prepared, queryFilter],
+  );
 
   useEffect(() => {
     void loadPanel();
@@ -364,6 +385,40 @@ export function TasksPanel(props: {
   useEffect(() => {
     void loadTasks();
   }, [loadTasks]);
+
+  // Keep the visible view fresh: the query is already scoped to the current
+  // list and filters, and panel reads are fully local, so each tick only
+  // refetches what is on screen. Silent loads never flash loading states.
+  useEffect(() => {
+    if (prepared._tag === "None") return;
+    const id = setInterval(() => {
+      if (document.hidden) return;
+      void loadPanel(true);
+      void loadTasks(true);
+    }, VIEW_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [loadPanel, loadTasks]);
+
+  // The poll only refetches local rows; freshness from ClickUp comes from a
+  // background sync. Kick one quietly when the panel opens on stale data —
+  // the poll surfaces lastSyncAt/lastSyncError, so no toasts here.
+  const lastSyncAt = clickup?.lastSyncAt ?? null;
+  const autoSyncAttemptedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!tokenConfigured || busyKey === "clickup-sync") return;
+    const staleKey = lastSyncAt ?? "never";
+    if (autoSyncAttemptedRef.current === staleKey) return;
+    const isStale =
+      lastSyncAt === null ||
+      Date.now() - new Date(lastSyncAt).getTime() > CLICKUP_AUTO_SYNC_MAX_AGE_MS;
+    if (!isStale || prepared._tag === "None") return;
+    autoSyncAttemptedRef.current = staleKey;
+    void syncClickUpTasks(prepared.value)
+      .then(() => loadPanel(true))
+      .catch(() => {
+        // A failed kick is reported by the next panel poll via lastSyncError.
+      });
+  }, [busyKey, lastSyncAt, loadPanel, prepared, tokenConfigured]);
 
   const runMutation = useCallback(
     async (key: string, action: (prepared: PreparedConnection) => Promise<void | TaskPanel>) => {
@@ -429,19 +484,6 @@ export function TasksPanel(props: {
     });
   }, [panel, runMutation]);
 
-  const createManual = useCallback(() => {
-    const title = manualTitle.trim();
-    if (!title) return;
-    void runMutation("manual-create", async (connection) => {
-      await createManualTask(connection, {
-        title,
-        ...(manualDescription.trim() ? { description: manualDescription.trim() } : {}),
-      });
-      setManualTitle("");
-      setManualDescription("");
-    });
-  }, [manualDescription, manualTitle, runMutation]);
-
   const setTaskLink = useCallback(
     (taskId: TaskId, linkedThreadId: ThreadId | null) => {
       void runMutation(`task-link:${taskId}`, async (connection) => {
@@ -485,6 +527,7 @@ export function TasksPanel(props: {
   const createLinkedThread = useCallback(
     async (task: Task) => {
       const threadId = newThreadId();
+      const threadRef = scopeThreadRef(props.environmentId, threadId);
       const createResult = await createThread({
         environmentId: props.environmentId,
         input: {
@@ -503,13 +546,20 @@ export function TasksPanel(props: {
         return;
       }
       setTaskLink(task.id, threadId);
-      void navigate({
+      // The thread route bounces to home while the thread detail is still
+      // syncing, so wait for the snapshot before navigating.
+      const synced = await waitForServerThreadDetail(threadRef);
+      useRightPanelStore.getState().open(threadRef, "tasks");
+      await navigate({
         to: "/$environmentId/$threadId",
         params: {
           environmentId: props.environmentId,
           threadId,
         },
       });
+      if (synced) {
+        requestTaskPanelView(props.environmentId, task.id);
+      }
     },
     [
       createThread,
@@ -553,13 +603,50 @@ export function TasksPanel(props: {
     };
   }, [tasksResult?.tasks]);
 
-  const detailTask = useMemo(
-    () =>
-      selectedTaskId
-        ? (tasksResult?.tasks.find((task) => task.id === selectedTaskId) ?? null)
-        : null,
-    [selectedTaskId, tasksResult],
-  );
+  // The detail view must not depend on the current query page: a sync bumps
+  // updated_at on every synced row and can push the selected task off page 1,
+  // and a view request can land before the first query resolves. Prefer the
+  // page's copy; otherwise fetch the task directly by id.
+  useEffect(() => {
+    if (!selectedTaskId) {
+      setDetailTask(null);
+      setDetailLoading(false);
+      return;
+    }
+    const inPage = tasksResult?.tasks.find((task) => task.id === selectedTaskId);
+    if (inPage) {
+      setDetailTask(inPage);
+      setDetailLoading(false);
+      return;
+    }
+    if (prepared._tag === "None") {
+      setDetailTask(null);
+      setDetailLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDetailLoading(true);
+    void fetchTasksQuery(prepared.value, {
+      taskIds: [selectedTaskId],
+      page: 1,
+      pageSize: 1,
+    })
+      .then((result) => {
+        // Accept only the requested row: a server that dropped the filter
+        // (older contract) would answer with the top of the list instead.
+        const match = result.tasks.find((task) => task.id === selectedTaskId) ?? null;
+        if (!cancelled) setDetailTask(match);
+      })
+      .catch(() => {
+        if (!cancelled) setDetailTask(null);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [prepared, selectedTaskId, tasksResult]);
 
   const facets = panel?.facets ?? null;
   const totalTasks = tasksResult?.total ?? 0;
@@ -665,19 +752,47 @@ export function TasksPanel(props: {
     setPage(1);
   }, []);
 
-  const refreshButtons = (
-    <Button
-      size="sm"
-      variant="ghost"
-      onClick={() => {
-        void loadPanel();
-        void loadTasks();
-      }}
-      disabled={loading || tasksLoading}
-    >
-      <RefreshCwIcon className={cn("size-3.5", (loading || tasksLoading) && "animate-spin")} />
-      Refresh
-    </Button>
+  const isSyncing = busyKey === "clickup-sync";
+  const lastSyncRelative = lastSyncAt === null ? null : formatRelativeTimeLabel(lastSyncAt);
+  const lastSyncError = clickup?.lastSyncError ?? null;
+  const headerActions = (
+    <div className="flex shrink-0 items-center gap-2">
+      {tokenConfigured ? (
+        <>
+          {isSyncing ? (
+            <span className="text-xs text-muted-foreground">Syncing…</span>
+          ) : lastSyncError ? (
+            <span
+              className="truncate text-xs text-destructive"
+              title={`Sync failed: ${lastSyncError}`}
+            >
+              Sync failed
+            </span>
+          ) : lastSyncAt !== null && lastSyncRelative ? (
+            <span
+              className="text-xs text-muted-foreground"
+              title={`Last synced ${new Date(lastSyncAt).toLocaleString()}`}
+            >
+              Last synced {lastSyncRelative}
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">Never synced</span>
+          )}
+          <Button size="sm" variant="ghost" onClick={syncNow} disabled={isSyncing}>
+            <RefreshCwIcon className={cn("size-3.5", isSyncing && "animate-spin")} />
+            Sync
+          </Button>
+        </>
+      ) : null}
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        onClick={() => void navigate({ to: "/settings/connections", hash: "clickup" })}
+        aria-label="ClickUp settings"
+      >
+        <SettingsIcon />
+      </Button>
+    </div>
   );
 
   const renderTaskCard = (task: Task) => (
@@ -746,6 +861,10 @@ export function TasksPanel(props: {
 
             {detailTask ? (
               <TaskDetailsBody task={detailTask} />
+            ) : detailLoading ? (
+              <div className="flex justify-center py-6">
+                <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground">This task is no longer available.</p>
             )}
@@ -798,7 +917,7 @@ export function TasksPanel(props: {
                 ) : null}
               </div>
             </div>
-            {refreshButtons}
+            {headerActions}
           </section>
 
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
@@ -899,7 +1018,7 @@ export function TasksPanel(props: {
       <div className="flex flex-col gap-5 p-4">
         <section className="flex items-start justify-between gap-3">
           <h3 className="text-sm font-semibold">Tasks</h3>
-          {refreshButtons}
+          {headerActions}
         </section>
 
         {error ? <p className="text-xs text-destructive">{error}</p> : null}
@@ -987,71 +1106,6 @@ export function TasksPanel(props: {
               ))}
             </div>
           )}
-        </section>
-
-        <section className="rounded-xl border border-border/70 bg-card/80 p-3">
-          <div className="flex gap-2">
-            <Input
-              value={manualTitle}
-              onChange={(event) => setManualTitle(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") createManual();
-              }}
-              placeholder="Add a task for this project"
-            />
-            <Button
-              size="sm"
-              onClick={createManual}
-              disabled={busyKey === "manual-create" || manualTitle.trim().length === 0}
-            >
-              {busyKey === "manual-create" ? (
-                <Loader2Icon className="size-3.5 animate-spin" />
-              ) : null}
-              Add
-            </Button>
-          </div>
-          <Textarea
-            value={manualDescription}
-            onChange={(event) => setManualDescription(event.target.value)}
-            placeholder="Optional context"
-            className="mt-2 min-h-9 border-none bg-transparent px-0 shadow-none focus-visible:ring-0"
-          />
-        </section>
-
-        <section className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-card/80 px-3 py-2.5">
-          <div className="min-w-0 text-xs text-muted-foreground">
-            {!tokenConfigured ? (
-              <span>ClickUp not connected.</span>
-            ) : clickup?.lastSyncError ? (
-              <span className="text-destructive">Sync failed: {clickup.lastSyncError}</span>
-            ) : clickup?.lastSyncAt ? (
-              <span>Last synced {new Date(clickup.lastSyncAt).toLocaleString()}</span>
-            ) : (
-              <span>Connected. Never synced.</span>
-            )}
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            {tokenConfigured ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={syncNow}
-                disabled={busyKey === "clickup-sync"}
-              >
-                {busyKey === "clickup-sync" ? (
-                  <Loader2Icon className="size-3.5 animate-spin" />
-                ) : null}
-                Sync
-              </Button>
-            ) : null}
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => void navigate({ to: "/settings/connections", hash: "clickup" })}
-            >
-              Configure
-            </Button>
-          </div>
         </section>
       </div>
     </ScrollArea>
