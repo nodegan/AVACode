@@ -148,14 +148,28 @@ export function DraftHeroHeadline({
   );
 
   return (
-    <h1 className="mx-auto w-full max-w-5xl text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
-      {hasResolvedProject ? (
-        <>What should we build in {projectSelector}?</>
-      ) : canChooseProject ? (
-        <>{projectSelector} to start</>
-      ) : (
-        <>Add a project to start</>
-      )}
-    </h1>
+    <div className="mx-auto w-full max-w-5xl">
+      <img
+        src="/logo.svg"
+        alt=""
+        aria-hidden
+        className="mx-auto mb-6 block h-10 w-auto dark:hidden sm:h-12"
+      />
+      <img
+        src="/logo-dark.svg"
+        alt=""
+        aria-hidden
+        className="mx-auto mb-6 hidden h-10 w-auto dark:block sm:h-12"
+      />
+      <h1 className="text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
+        {hasResolvedProject ? (
+          <>What should we build in {projectSelector}?</>
+        ) : canChooseProject ? (
+          <>{projectSelector} to start</>
+        ) : (
+          <>Add a project to start</>
+        )}
+      </h1>
+    </div>
   );
 }
