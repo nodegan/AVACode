@@ -2,12 +2,15 @@ import type {
   EnvironmentId,
   Task,
   TaskAttachment,
+  TaskClickUpComment,
   TaskStatusCategory,
   ThreadId,
 } from "@t3tools/contracts";
 import {
   ArrowUpRightIcon,
   CalendarIcon,
+  CheckIcon,
+  ChevronRightIcon,
   CloudIcon,
   EllipsisIcon,
   ExternalLinkIcon,
@@ -27,6 +30,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
 import { Button } from "~/components/ui/button";
@@ -49,7 +53,7 @@ import { cn } from "~/lib/utils";
 import { ExpandedImageDialog } from "../chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
 import { CreateTaskBranchButton } from "./CreateTaskBranchButton";
-import { fetchTaskAttachments } from "./taskApi";
+import { fetchTaskAttachments, fetchTaskComments } from "./taskApi";
 export function statusTone(status: TaskStatusCategory): string {
   switch (status) {
     case "done":
@@ -296,6 +300,202 @@ export interface TaskDetailsBodyProps {
   environmentId?: EnvironmentId | undefined;
 }
 
+interface ClickUpCommentThread {
+  readonly comment: TaskClickUpComment;
+  readonly replies: Array<TaskClickUpComment>;
+}
+
+/**
+ * Comment and note bodies render as chat-style markdown bubbles; real line
+ * breaks are kept so pasted ClickUp text stays readable.
+ */
+function TaskMarkdownBubble({ body }: { body: string }) {
+  return (
+    <div className="chat-markdown mt-1 w-fit max-w-full rounded-2xl bg-message px-3 py-2 text-sm text-message-foreground">
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{body}</ReactMarkdown>
+    </div>
+  );
+}
+
+/**
+ * Groups the flat ClickUp comment list into top-level comments with nested
+ * replies. ClickUp replies name their parent comment id; a reply whose parent
+ * was dropped (e.g. an empty comment) still renders, as a top-level comment.
+ */
+function groupClickUpCommentThreads(
+  comments: ReadonlyArray<TaskClickUpComment>,
+): Array<ClickUpCommentThread> {
+  const threadsById = new Map<string, ClickUpCommentThread>();
+  const threads: Array<ClickUpCommentThread> = [];
+  for (const comment of comments) {
+    const parent = comment.parentId === null ? undefined : threadsById.get(comment.parentId);
+    if (parent) {
+      parent.replies.push(comment);
+      continue;
+    }
+    const thread = { comment, replies: [] };
+    threadsById.set(comment.id, thread);
+    threads.push(thread);
+  }
+  return threads;
+}
+
+/** Round author avatar like ClickUp's; falls back to a colored initial. */
+function ClickUpCommentAvatar(props: {
+  name: string;
+  avatarUrl: string | null;
+  color: string | null;
+}) {
+  if (props.avatarUrl) {
+    return (
+      <img
+        src={props.avatarUrl}
+        alt=""
+        loading="lazy"
+        className="size-6 shrink-0 rounded-full border border-border/70 object-cover"
+      />
+    );
+  }
+  const initial = props.name.trim().charAt(0).toUpperCase();
+  return (
+    <span
+      className="flex size-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
+      style={props.color ? { backgroundColor: props.color } : undefined}
+    >
+      {initial || "?"}
+    </span>
+  );
+}
+
+function ClickUpCommentRow({ comment }: { comment: TaskClickUpComment }) {
+  return (
+    <div className="flex min-w-0 gap-2">
+      <ClickUpCommentAvatar
+        name={comment.authorName}
+        avatarUrl={comment.authorAvatarUrl}
+        color={comment.authorColor}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <span className="text-xs font-medium">{comment.authorName}</span>
+          {comment.createdAt ? (
+            <span
+              className="text-[11px] text-muted-foreground"
+              title={new Date(comment.createdAt).toLocaleString()}
+            >
+              {new Date(comment.createdAt).toLocaleString()}
+            </span>
+          ) : null}
+          {comment.resolved ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+              <CheckIcon className="size-3" />
+              Resolved
+            </span>
+          ) : null}
+        </div>
+        <TaskMarkdownBubble body={comment.body} />
+      </div>
+    </div>
+  );
+}
+
+function ClickUpCommentThreadRow({ thread }: { thread: ClickUpCommentThread }) {
+  // Threads stay collapsed until asked for, like ClickUp's "N replies" toggle.
+  const [expanded, setExpanded] = useState(false);
+  const replyLabel = thread.replies.length === 1 ? "1 reply" : `${thread.replies.length} replies`;
+  return (
+    <div className="space-y-2">
+      <ClickUpCommentRow comment={thread.comment} />
+      {thread.replies.length > 0 ? (
+        <>
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            className="-ml-1 h-6 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-muted/55"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <ChevronRightIcon
+              className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
+            />
+            {expanded ? "Hide replies" : replyLabel}
+          </Button>
+          {expanded ? (
+            // Replies nest under their parent behind a thread rail, like ClickUp.
+            <div className="ml-4 space-y-2 border-l border-border/70 pl-3">
+              {thread.replies.map((reply) => (
+                <ClickUpCommentRow key={reply.id} comment={reply} />
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+type ClickUpCommentsState =
+  | { readonly status: "loading" }
+  | { readonly status: "error" }
+  | { readonly status: "ready"; readonly comments: ReadonlyArray<TaskClickUpComment> };
+
+/**
+ * Comments left on the task in ClickUp, fetched on demand when the detail view
+ * opens (read-only for now; local comments live in the composer below).
+ * Manual tasks render nothing.
+ */
+function TaskClickUpCommentsSection(props: TaskDetailsBodyProps) {
+  const { task } = props;
+  const prepared = usePreparedConnection(props.environmentId ?? null);
+  const isClickUpTask = task.source === "clickup" && task.externalTaskId !== null;
+  const [state, setState] = useState<ClickUpCommentsState>({ status: "loading" });
+
+  useEffect(() => {
+    if (!isClickUpTask || prepared._tag === "None") return;
+    let cancelled = false;
+    setState({ status: "loading" });
+    fetchTaskComments(prepared.value, task.id)
+      .then((result) => {
+        if (!cancelled) setState({ status: "ready", comments: result.comments });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isClickUpTask, prepared, task.id]);
+
+  const threads = useMemo(
+    () => (state.status === "ready" ? groupClickUpCommentThreads(state.comments) : []),
+    [state],
+  );
+
+  if (!isClickUpTask || prepared._tag === "None") return null;
+
+  return (
+    <div className="space-y-2">
+      <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        ClickUp comments
+      </h5>
+      {state.status === "loading" ? (
+        <p className="text-xs text-muted-foreground">Loading…</p>
+      ) : state.status === "error" ? (
+        <p className="text-xs text-destructive">Failed to load ClickUp comments.</p>
+      ) : threads.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No comments on ClickUp.</p>
+      ) : (
+        <div className="space-y-3">
+          {threads.map((thread) => (
+            <ClickUpCommentThreadRow key={thread.comment.id} thread={thread} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function formatTaskDate(timestamp: string): string {
   return new Date(timestamp).toLocaleDateString(undefined, {
     month: "short",
@@ -400,19 +600,20 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
         ) : null}
       </div>
       <TaskAttachmentsSection task={task} environmentId={props.environmentId} />
+      <TaskClickUpCommentsSection task={task} environmentId={props.environmentId} />
       <div className="space-y-2">
         <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          Comments
+          Notes
         </h5>
-        {task.comments.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No comments yet.</p>
+        {task.notes.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No notes yet.</p>
         ) : (
           <div className="space-y-2">
-            {task.comments.map((comment) => (
-              <div key={comment.id} className="rounded-lg bg-muted/50 p-2.5">
-                <p className="whitespace-pre-wrap text-sm">{comment.body}</p>
+            {task.notes.map((note) => (
+              <div key={note.id} className="min-w-0">
+                <TaskMarkdownBubble body={note.body} />
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  {new Date(comment.createdAt).toLocaleString()}
+                  {new Date(note.createdAt).toLocaleString()}
                 </p>
               </div>
             ))}
@@ -423,32 +624,32 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
   );
 }
 
-export interface TaskCommentComposerProps {
+export interface TaskNoteComposerProps {
   task: Task;
   busyKey: string | null;
-  commentDraft: string;
-  onCommentDraftChange: (value: string) => void;
-  onAddComment: () => void;
+  noteDraft: string;
+  onNoteDraftChange: (value: string) => void;
+  onAddNote: () => void;
 }
 
-/** Comment composer pinned to the bottom of the detail view. */
-export function TaskCommentComposer(props: TaskCommentComposerProps) {
+/** Note composer pinned to the bottom of the detail view. */
+export function TaskNoteComposer(props: TaskNoteComposerProps) {
   const { task } = props;
   return (
     <div className="flex items-center gap-2">
       <Input
-        value={props.commentDraft}
-        onChange={(event) => props.onCommentDraftChange(event.target.value)}
+        value={props.noteDraft}
+        onChange={(event) => props.onNoteDraftChange(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Enter") props.onAddComment();
+          if (event.key === "Enter") props.onAddNote();
         }}
-        placeholder="Add a local comment"
+        placeholder="Add a note"
         className="h-9 sm:h-8"
       />
       <Button
         size="sm"
-        onClick={props.onAddComment}
-        disabled={props.busyKey === `comment:${task.id}` || props.commentDraft.trim().length === 0}
+        onClick={props.onAddNote}
+        disabled={props.busyKey === `note:${task.id}` || props.noteDraft.trim().length === 0}
       >
         Add
       </Button>
@@ -613,9 +814,9 @@ export interface TaskDetailsDialogProps {
   /** Environment + thread context enable the task-branch action. */
   environmentId?: EnvironmentId | undefined;
   busyKey: string | null;
-  commentDraft: string;
-  onCommentDraftChange: (value: string) => void;
-  onAddComment: () => void;
+  noteDraft: string;
+  onNoteDraftChange: (value: string) => void;
+  onAddNote: () => void;
   /** Moves the detail view into the tasks panel; the dialog closes. */
   onShowInPanel?: (() => void) | undefined;
   onDelete?: (() => void) | undefined;
@@ -681,12 +882,12 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
           <TaskDetailsBody task={task} environmentId={props.environmentId} />
         </DialogPanel>
         <DialogFooter>
-          <TaskCommentComposer
+          <TaskNoteComposer
             task={task}
             busyKey={props.busyKey}
-            commentDraft={props.commentDraft}
-            onCommentDraftChange={props.onCommentDraftChange}
-            onAddComment={props.onAddComment}
+            noteDraft={props.noteDraft}
+            onNoteDraftChange={props.onNoteDraftChange}
+            onAddNote={props.onAddNote}
           />
         </DialogFooter>
       </DialogPopup>

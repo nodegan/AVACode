@@ -7,7 +7,7 @@ import { usePreparedConnection } from "~/state/session";
 import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TaskDetailsDialog } from "./TaskDetailsDialog";
-import { addTaskComment, deleteTask, fetchThreadTask, setTaskLinkedThread } from "./taskApi";
+import { addTaskNote, deleteTask, fetchThreadTask, setTaskLinkedThread } from "./taskApi";
 import { notifyTasksChanged, useTaskLinksByThreadId } from "./taskLinkStore";
 
 export function ThreadTaskIndicator(props: {
@@ -30,7 +30,7 @@ export function ThreadTaskIndicator(props: {
   );
   const [task, setTask] = useState<Task | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [commentDraft, setCommentDraft] = useState("");
+  const [noteDraft, setNoteDraft] = useState("");
 
   const openDetails = useCallback(async () => {
     if (!prepared) return;
@@ -110,13 +110,13 @@ export function ThreadTaskIndicator(props: {
           activeThreadId={threadId}
           environmentId={environmentId}
           busyKey={busyKey}
-          commentDraft={commentDraft}
-          onCommentDraftChange={setCommentDraft}
-          onAddComment={() => {
-            const body = commentDraft.trim();
+          noteDraft={noteDraft}
+          onNoteDraftChange={setNoteDraft}
+          onAddNote={() => {
+            const body = noteDraft.trim();
             if (!body) return;
-            void runMutation(`comment:${task.id}`, (connection) =>
-              addTaskComment(connection, task.id, body),
+            void runMutation(`note:${task.id}`, (connection) =>
+              addTaskNote(connection, task.id, body),
             );
           }}
           onDelete={

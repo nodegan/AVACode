@@ -6,8 +6,8 @@ import { IsoDateTime, ThreadId, TrimmedNonEmptyString, TrimmedString } from "./b
 export const TaskId = TrimmedNonEmptyString.pipe(Schema.brand("TaskId"));
 export type TaskId = typeof TaskId.Type;
 
-export const TaskCommentId = TrimmedNonEmptyString.pipe(Schema.brand("TaskCommentId"));
-export type TaskCommentId = typeof TaskCommentId.Type;
+export const TaskNoteId = TrimmedNonEmptyString.pipe(Schema.brand("TaskNoteId"));
+export type TaskNoteId = typeof TaskNoteId.Type;
 
 export const TaskSource = Schema.Literals(["manual", "clickup"]);
 export type TaskSource = typeof TaskSource.Type;
@@ -27,14 +27,15 @@ export const ClickUpWorkspaceSummary = Schema.Struct({
 });
 export type ClickUpWorkspaceSummary = typeof ClickUpWorkspaceSummary.Type;
 
-export const TaskComment = Schema.Struct({
-  id: TaskCommentId,
+/** A locally stored note on a task, as opposed to ClickUp's own comments. */
+export const TaskNote = Schema.Struct({
+  id: TaskNoteId,
   taskId: TaskId,
   body: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
-export type TaskComment = typeof TaskComment.Type;
+export type TaskNote = typeof TaskNote.Type;
 
 export const TaskAttachment = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -55,6 +56,31 @@ export const TaskAttachmentsResult = Schema.Struct({
   attachments: Schema.Array(TaskAttachment).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type TaskAttachmentsResult = typeof TaskAttachmentsResult.Type;
+
+/** A comment left on the task in ClickUp, fetched read-only for the detail view. */
+export const TaskClickUpComment = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  /** ClickUp comment id this comment replies to; null for top-level comments. */
+  parentId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  body: TrimmedNonEmptyString,
+  authorName: TrimmedNonEmptyString,
+  authorAvatarUrl: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  authorColor: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  createdAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  resolved: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+});
+export type TaskClickUpComment = typeof TaskClickUpComment.Type;
+
+export const TaskClickUpCommentsResult = Schema.Struct({
+  comments: Schema.Array(TaskClickUpComment).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type TaskClickUpCommentsResult = typeof TaskClickUpCommentsResult.Type;
 
 export const Task = Schema.Struct({
   id: TaskId,
@@ -92,7 +118,7 @@ export const Task = Schema.Struct({
   ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
-  comments: Schema.Array(TaskComment).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  notes: Schema.Array(TaskNote).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type Task = typeof Task.Type;
 
@@ -205,11 +231,11 @@ export const DeleteTaskInput = Schema.Struct({
 });
 export type DeleteTaskInput = typeof DeleteTaskInput.Type;
 
-export const AddTaskCommentInput = Schema.Struct({
+export const AddTaskNoteInput = Schema.Struct({
   taskId: TaskId,
   body: TrimmedNonEmptyString,
 });
-export type AddTaskCommentInput = typeof AddTaskCommentInput.Type;
+export type AddTaskNoteInput = typeof AddTaskNoteInput.Type;
 
 export const SetClickUpTokenInput = Schema.Struct({
   token: TrimmedNonEmptyString,

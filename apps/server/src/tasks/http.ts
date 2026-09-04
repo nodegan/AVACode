@@ -81,13 +81,13 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
-        "addComment",
-        Effect.fn("environment.tasks.addComment")(function* (args) {
+        "addNote",
+        Effect.fn("environment.tasks.addNote")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
           return yield* tasks
-            .addComment(args.payload)
-            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_comment_failed", cause)));
+            .addNote(args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_note_failed", cause)));
         }),
       )
       .handle(
@@ -97,6 +97,16 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* tasks
             .getTaskAttachments(args.params.taskId)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
+        }),
+      )
+      .handle(
+        "taskComments",
+        Effect.fn("environment.tasks.taskComments")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* tasks
+            .getTaskComments(args.params.taskId)
             .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
         }),
       )

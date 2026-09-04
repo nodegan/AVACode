@@ -15,7 +15,7 @@ import {
 import * as ServerSecretStoreModule from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
-import { mapClickUpAttachments, TaskService } from "./TaskService.ts";
+import { mapClickUpAttachments, mapClickUpComments, TaskService } from "./TaskService.ts";
 import { TaskServiceLive } from "./TaskService.ts";
 
 const ConfigLayer = Layer.fresh(
@@ -77,23 +77,97 @@ const clickUpAttachments = [
   { id: "  ", url: null, title: "orphan.png" },
 ];
 
+/**
+ * Comment payloads for the task-comments endpoint, keyed by the start_id page
+ * cursor. ClickUp only lists top-level comments here; threads carry a
+ * reply_count and serve their replies from a separate per-comment endpoint.
+ */
+const clickUpCommentPages: Record<string, unknown> = {
+  "": {
+    comments: [
+      {
+        id: "c-1",
+        reply_count: 2,
+        text_content: "Root comment",
+        resolved: false,
+        date: "1567700000000",
+        user: {
+          id: 7,
+          username: "Ana",
+          color: "#7b68ee",
+          profilePicture: "https://avatars.clickup.com/ana.png",
+        },
+      },
+      {
+        id: "c-2",
+        comment_text: "Second top-level comment",
+        date: "1567780450202",
+        user: { id: 8, username: null },
+      },
+    ],
+    has_more: true,
+  },
+  "c-2": {
+    comments: [
+      {
+        id: "c-3",
+        text_content: "Third comment",
+        date: "1567866850202",
+        user: { username: "Bo" },
+      },
+      { id: "  ", text_content: "orphan" },
+      { id: "c-4", text_content: null },
+    ],
+  },
+};
+
+/** Thread replies keyed by the parent comment id served by /comment/:id/reply. */
+const clickUpCommentReplies: Record<string, unknown> = {
+  "c-1": {
+    comments: [
+      {
+        id: "r-1",
+        text_content: "First reply",
+        date: "1567740000000",
+        user: { username: "Bo" },
+      },
+      {
+        id: "r-2",
+        text_content: "Second reply",
+        resolved: true,
+        date: "1567760000000",
+        user: { username: "Ana" },
+      },
+    ],
+  },
+};
+
 const ClickUpStubLayer = Layer.succeed(
   HttpClient.HttpClient,
   HttpClient.make((request) => {
     const urlOption = HttpClientRequest.toUrl(request);
     const url = urlOption._tag === "Some" ? urlOption.value.toString() : "";
     // The single-task URL ("…/task/<id>") is distinct from the list endpoint
-    // ("…/team/<id>/task?page=…") by the trailing slash.
+    // ("…/team/<id>/task?page=…") by the trailing slash; comment replies ride
+    // their own /comment/<id>/reply route.
+    const pathname = new URL(url).pathname;
+    const replyMatch = /\/comment\/([^/]+)\/reply$/.exec(pathname);
     const body: unknown = url.endsWith("/team")
       ? { teams: [{ id: "4679239", name: "Test Workspace" }] }
-      : /\/task\/[^/?]+/.test(url)
-        ? {
-            id: "900000",
-            name: "With files",
-            status: { status: "to do", type: "open" },
-            attachments: clickUpAttachments,
-          }
-        : (clickUpPages[pageForUrl(url)] ?? { tasks: [], last_page: true });
+      : replyMatch
+        ? (clickUpCommentReplies[replyMatch[1] ?? ""] ?? { comments: [] })
+        : pathname.endsWith("/comment")
+          ? (clickUpCommentPages[new URL(url).searchParams.get("start_id") ?? ""] ?? {
+              comments: [],
+            })
+          : /\/task\/[^/?]+/.test(url)
+            ? {
+                id: "900000",
+                name: "With files",
+                status: { status: "to do", type: "open" },
+                attachments: clickUpAttachments,
+              }
+            : (clickUpPages[pageForUrl(url)] ?? { tasks: [], last_page: true });
     return Effect.succeed(
       HttpClientResponse.fromWeb(
         request,
@@ -598,5 +672,88 @@ it.live("getTaskAttachments maps ClickUp attachments for a synced task", () =>
     assert.strictEqual(file?.title, "spec.pdf");
     assert.strictEqual(file?.thumbnailUrl, null);
     assert.strictEqual(file?.size, 102400);
+  }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
+);
+
+it.effect("mapClickUpComments normalizes the ClickUp comment payload", () =>
+  Effect.sync(() => {
+    const comments = mapClickUpComments([
+      {
+        id: "c-9",
+        parent: "0",
+        comment_text: "Markup fallback",
+        date: "1567780450202",
+        user: { username: "  ", color: "not-a-color" },
+      },
+      {
+        id: "c-10",
+        parent: "c-9",
+        text_content: "Reply",
+        resolved: true,
+        date: "1567866850202",
+      },
+      { id: " ", text_content: "orphan" },
+      { id: "c-11", text_content: null },
+    ]);
+    assert.strictEqual(comments.length, 2);
+    // A "0" parent means top-level; blank usernames and bad colors fall back.
+    assert.strictEqual(comments[0]?.parentId, null);
+    assert.strictEqual(comments[0]?.authorName, "ClickUp user");
+    assert.strictEqual(comments[0]?.authorColor, null);
+    assert.strictEqual(comments[0]?.body, "Markup fallback");
+    assert.strictEqual(
+      comments[0]?.createdAt,
+      DateTime.formatIso(DateTime.makeUnsafe(1567780450202)),
+    );
+    // Replies keep their parent's comment id for threading.
+    assert.strictEqual(comments[1]?.parentId, "c-9");
+    assert.strictEqual(comments[1]?.resolved, true);
+  }),
+);
+
+it.live("getTaskComments threads ClickUp comments for a synced task", () =>
+  Effect.gen(function* () {
+    yield* seedTasks([
+      { title: "With discussion", listId: "list-a", listName: "Alpha" },
+      { title: "Manual" },
+    ]);
+    const service = yield* TaskService;
+    const clickupId = TaskId.make("aaaaaaaa-aaaa-4aaa-8aaa-000000000000");
+    const manualId = TaskId.make("aaaaaaaa-aaaa-4aaa-8aaa-000000000001");
+
+    // Manual tasks never touch the network and answer empty.
+    const manualEmpty = yield* service.getTaskComments(manualId);
+    assert.deepStrictEqual(manualEmpty, { comments: [] });
+
+    // Without a token there is nothing to ask either.
+    const tokenless = yield* service.getTaskComments(clickupId);
+    assert.deepStrictEqual(tokenless, { comments: [] });
+
+    yield* service.setClickUpToken("pk_test_token");
+    const result = yield* service.getTaskComments(clickupId);
+    // Pages join (the cursor chains on start_id), the thread replies hang off
+    // their parent's endpoint, and empty entries drop out.
+    assert.deepStrictEqual(
+      result.comments.map((comment) => `${comment.id}:${comment.parentId ?? "root"}`),
+      ["c-1:root", "r-1:c-1", "r-2:c-1", "c-2:root", "c-3:root"],
+    );
+    const [root, firstReply, secondReply, secondTop, third] = result.comments;
+    assert.strictEqual(root?.authorName, "Ana");
+    assert.strictEqual(root?.authorColor, "#7B68EE");
+    assert.strictEqual(root?.authorAvatarUrl, "https://avatars.clickup.com/ana.png");
+    assert.strictEqual(firstReply?.body, "First reply");
+    assert.strictEqual(secondReply?.resolved, true);
+    // Replies sort between their parent and the later top-level comments.
+    assert.ok(
+      root.createdAt !== null &&
+        firstReply.createdAt !== null &&
+        secondReply.createdAt !== null &&
+        secondTop.createdAt !== null &&
+        third.createdAt !== null &&
+        root.createdAt < firstReply.createdAt &&
+        firstReply.createdAt < secondReply.createdAt &&
+        secondReply.createdAt < secondTop.createdAt &&
+        secondTop.createdAt < third.createdAt,
+    );
   }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
 );

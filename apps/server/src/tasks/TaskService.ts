@@ -1,5 +1,5 @@
 import {
-  AddTaskCommentInput,
+  AddTaskNoteInput,
   type ClickUpConnectionStatus,
   CreateManualTaskInput,
   type ClickUpWorkspaceSummary,
@@ -7,8 +7,11 @@ import {
   type Task,
   TaskAttachment,
   type TaskAttachmentsResult,
-  type TaskComment,
-  TaskComment as TaskCommentSchema,
+  TaskClickUpComment as TaskClickUpCommentSchema,
+  type TaskClickUpComment,
+  type TaskClickUpCommentsResult,
+  type TaskNote,
+  TaskNote as TaskNoteSchema,
   TaskFacets,
   TaskId,
   type TaskLinksResult,
@@ -65,7 +68,7 @@ interface TaskRow {
   readonly updatedAt: string;
 }
 
-interface TaskCommentRow {
+interface TaskNoteRow {
   readonly id: string;
   readonly taskId: string;
   readonly body: string;
@@ -147,6 +150,30 @@ interface ClickUpAttachmentResponse {
   readonly thumbnail_small?: string | null;
   readonly thumbnail_large?: string | null;
   readonly date?: string | number | null;
+}
+
+interface ClickUpCommentUserResponse {
+  readonly id?: string | number | null;
+  readonly username?: string | null;
+  readonly color?: string | null;
+  readonly profilePicture?: string | null;
+}
+
+interface ClickUpCommentResponse {
+  readonly id?: string | number | null;
+  readonly parent?: string | number | null;
+  readonly reply_count?: string | number | null;
+  readonly text_content?: string | null;
+  readonly comment_text?: string | null;
+  readonly resolved?: boolean | null;
+  readonly date?: string | number | null;
+  readonly user?: ClickUpCommentUserResponse | null;
+}
+
+interface ClickUpCommentsResponse {
+  readonly comments?: ReadonlyArray<ClickUpCommentResponse>;
+  readonly has_more?: boolean;
+  readonly last_page?: boolean;
 }
 
 export class TaskServiceError extends Schema.TaggedErrorClass<TaskServiceError>()(
@@ -310,10 +337,11 @@ export function clickUpFolderRef(task: ClickUpTaskResponse): {
   return { externalFolderId: id, externalFolderName: name };
 }
 
-const decodeCommentRow = Schema.decodeSync(TaskCommentSchema);
+const decodeNoteRow = Schema.decodeSync(TaskNoteSchema);
 const decodeTaskRow = Schema.decodeSync(TaskSchema);
 const decodeFacets = Schema.decodeSync(TaskFacets);
 const decodeAttachment = Schema.decodeSync(TaskAttachment);
+const decodeClickUpComment = Schema.decodeSync(TaskClickUpCommentSchema);
 
 /**
  * Normalize ClickUp's attachment payload for the detail view. Entries without
@@ -345,8 +373,42 @@ export function mapClickUpAttachments(
   return mapped;
 }
 
-function mapCommentRow(row: TaskCommentRow): TaskComment {
-  return decodeCommentRow({
+/**
+ * Normalize ClickUp's comment payload for the detail view. Comments without an
+ * id or body are dropped; the plain-text body wins over the markup variant so
+ * tags never render raw. Replies keep their parent's comment id for threading.
+ */
+export function mapClickUpComments(
+  comments: ReadonlyArray<ClickUpCommentResponse>,
+): Array<TaskClickUpComment> {
+  const mapped: Array<TaskClickUpComment> = [];
+  for (const comment of comments) {
+    const id = comment.id == null ? "" : String(comment.id).trim();
+    const body = comment.text_content?.trim() || comment.comment_text?.trim() || "";
+    if (id.length === 0 || body.length === 0) continue;
+    const parent = comment.parent == null ? "" : String(comment.parent).trim();
+    mapped.push(
+      decodeClickUpComment({
+        id,
+        parentId: parent.length === 0 || parent === "0" ? null : parent,
+        body,
+        authorName: comment.user?.username?.trim() || "ClickUp user",
+        authorAvatarUrl: comment.user?.profilePicture?.trim() || null,
+        authorColor: normalizeStatusColor(comment.user?.color),
+        createdAt: parseClickUpTimestamp(comment.date),
+        resolved: comment.resolved === true,
+      }),
+    );
+  }
+  // ClickUp serves comments oldest-first already; keep that stable even when a
+  // page boundary or clock skew shuffles the order.
+  return mapped.toSorted((left, right) =>
+    (left.createdAt ?? "9999").localeCompare(right.createdAt ?? "9999"),
+  );
+}
+
+function mapNoteRow(row: TaskNoteRow): TaskNote {
+  return decodeNoteRow({
     id: row.id,
     taskId: row.taskId,
     body: row.body,
@@ -355,7 +417,7 @@ function mapCommentRow(row: TaskCommentRow): TaskComment {
   });
 }
 
-function mapTaskRow(row: TaskRow, comments: ReadonlyArray<TaskComment>): Task {
+function mapTaskRow(row: TaskRow, notes: ReadonlyArray<TaskNote>): Task {
   return decodeTaskRow({
     id: row.id,
     source: row.source,
@@ -375,7 +437,7 @@ function mapTaskRow(row: TaskRow, comments: ReadonlyArray<TaskComment>): Task {
     externalUpdatedAt: row.externalUpdatedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    comments,
+    notes,
   });
 }
 
@@ -392,10 +454,13 @@ export class TaskService extends Context.Service<
     ) => Effect.Effect<Task, TaskServiceFailure>;
     readonly updateTask: (input: UpdateTaskInput) => Effect.Effect<Task, TaskServiceFailure>;
     readonly deleteTask: (input: DeleteTaskInput) => Effect.Effect<void, TaskServiceFailure>;
-    readonly addComment: (input: AddTaskCommentInput) => Effect.Effect<Task, TaskServiceFailure>;
+    readonly addNote: (input: AddTaskNoteInput) => Effect.Effect<Task, TaskServiceFailure>;
     readonly getTaskAttachments: (
       taskId: TaskId,
     ) => Effect.Effect<TaskAttachmentsResult, TaskServiceFailure>;
+    readonly getTaskComments: (
+      taskId: TaskId,
+    ) => Effect.Effect<TaskClickUpCommentsResult, TaskServiceFailure>;
     readonly setClickUpToken: (token: string) => Effect.Effect<void, TaskServiceFailure>;
     readonly clearClickUpToken: () => Effect.Effect<void, TaskServiceFailure>;
     readonly getClickUpStatus: () => Effect.Effect<ClickUpConnectionStatus, TaskServiceFailure>;
@@ -477,6 +542,13 @@ const make = Effect.gen(function* () {
   // workspace cannot stall it indefinitely. 50 pages = 5000 tasks.
   const TASK_SYNC_MAX_PAGES = 50;
 
+  // Comment threads are far smaller than task lists, but the cap still bounds
+  // a runaway pagination chain to the same end.
+  const TASK_COMMENTS_MAX_PAGES = 10;
+
+  // Get Task Comments serves 25 comments per page with no has_more flag.
+  const CLICKUP_COMMENTS_PAGE_SIZE = 25;
+
   const fetchClickUpTasks = (input: {
     readonly token: string;
     readonly syncConfig: TaskSyncConfig;
@@ -505,6 +577,70 @@ const make = Effect.gen(function* () {
         }
       }
       return tasks;
+    });
+  /**
+   * ClickUp keeps thread replies off the task comment list: a threaded comment
+   * carries a reply_count and serves its replies from a per-comment endpoint.
+   * Fetch those and tag them with the parent comment id so the detail view can
+   * group threads. Pages follow `start` + `start_id`, both required together.
+   * Reply fetches run after all pages with bounded concurrency — each is a
+   * full ClickUp round trip, and ClickUp latency spikes make sequential
+   * fetching exceed the client's request timeout.
+   */
+  const fetchClickUpComments = (input: {
+    readonly externalTaskId: string;
+    readonly token: string;
+  }) =>
+    Effect.gen(function* () {
+      const topLevel: ClickUpCommentResponse[] = [];
+      let startId: string | null = null;
+      let start: string | null = null;
+      for (let page = 0; page < TASK_COMMENTS_MAX_PAGES; page += 1) {
+        const url = new URL(
+          `https://api.clickup.com/api/v2/task/${encodeURIComponent(input.externalTaskId)}/comment`,
+        );
+        if (startId && start) {
+          url.searchParams.set("start_id", startId);
+          url.searchParams.set("start", start);
+        }
+        const payload = yield* fetchJson<ClickUpCommentsResponse>({
+          url: url.toString(),
+          token: input.token,
+        });
+        const pageComments = [...(payload.comments ?? [])];
+        topLevel.push(...pageComments);
+        const last = pageComments[pageComments.length - 1];
+        const lastId = last?.id == null ? null : String(last.id).trim();
+        const lastDate = last?.date == null ? null : String(last.date).trim();
+        const canPage = lastId !== null && lastDate !== null && lastId !== startId;
+        const more = payload.has_more === true || pageComments.length >= CLICKUP_COMMENTS_PAGE_SIZE;
+        if (!more || !canPage) {
+          break;
+        }
+        startId = lastId;
+        start = lastDate;
+      }
+
+      const comments = [...topLevel];
+      const threadedIds = topLevel
+        .filter((comment) => Number(comment.reply_count ?? 0) > 0)
+        .map((comment) => String(comment.id));
+      const replyPages = yield* Effect.forEach(
+        threadedIds,
+        (parentId) =>
+          fetchJson<ClickUpCommentsResponse>({
+            url: `https://api.clickup.com/api/v2/comment/${encodeURIComponent(parentId)}/reply`,
+            token: input.token,
+          }).pipe(Effect.map((payload) => payload.comments ?? [])),
+        { concurrency: 4 },
+      );
+      threadedIds.forEach((parentId, index) => {
+        for (const reply of replyPages[index] ?? []) {
+          // Replies carry no parent; the thread parent is the fetch source.
+          comments.push({ ...reply, parent: parentId });
+        }
+      });
+      return comments;
     });
 
   const loadSyncConfigRow = () =>
@@ -625,19 +761,19 @@ const make = Effect.gen(function* () {
       LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
     `;
 
-  const listCommentsByTaskIds = (taskIds: ReadonlyArray<string>) =>
+  const listNotesByTaskIds = (taskIds: ReadonlyArray<string>) =>
     taskIds.length === 0
-      ? Effect.succeed([] as TaskCommentRow[])
-      : sql<TaskCommentRow>`
+      ? Effect.succeed([] as TaskNoteRow[])
+      : sql<TaskNoteRow>`
           SELECT
-            comment_id AS "id",
+            note_id AS "id",
             task_id AS "taskId",
             body,
             created_at AS "createdAt",
             updated_at AS "updatedAt"
-          FROM task_comments
+          FROM task_notes
           WHERE ${sql.in("task_id", taskIds)}
-          ORDER BY created_at ASC, comment_id ASC
+          ORDER BY created_at ASC, note_id ASC
         `;
 
   const loadTaskFacets = () =>
@@ -734,9 +870,9 @@ const make = Effect.gen(function* () {
   const loadTaskById = (taskId: TaskId) =>
     Effect.gen(function* () {
       const row = yield* loadTaskRowById(taskId);
-      const commentRows = yield* listCommentsByTaskIds([taskId]);
-      const comments = commentRows.map(mapCommentRow);
-      return mapTaskRow(row, comments);
+      const noteRows = yield* listNotesByTaskIds([taskId]);
+      const notes = noteRows.map(mapNoteRow);
+      return mapTaskRow(row, notes);
     });
 
   const upsertTaskRow = (row: TaskRow) =>
@@ -875,15 +1011,15 @@ const make = Effect.gen(function* () {
       const totalPages = Math.max(1, Math.ceil(total / filter.pageSize));
       const page = Math.min(filter.page, totalPages);
       const taskRows = yield* listFilteredTasks(where, page, filter.pageSize);
-      const commentRows = yield* listCommentsByTaskIds(taskRows.map((task) => task.id));
-      const commentsByTaskId = new Map<string, TaskComment[]>();
-      for (const comment of commentRows) {
-        const entry = commentsByTaskId.get(comment.taskId) ?? [];
-        entry.push(mapCommentRow(comment));
-        commentsByTaskId.set(comment.taskId, entry);
+      const noteRows = yield* listNotesByTaskIds(taskRows.map((task) => task.id));
+      const notesByTaskId = new Map<string, TaskNote[]>();
+      for (const note of noteRows) {
+        const entry = notesByTaskId.get(note.taskId) ?? [];
+        entry.push(mapNoteRow(note));
+        notesByTaskId.set(note.taskId, entry);
       }
       return {
-        tasks: taskRows.map((task) => mapTaskRow(task, commentsByTaskId.get(task.id) ?? [])),
+        tasks: taskRows.map((task) => mapTaskRow(task, notesByTaskId.get(task.id) ?? [])),
         total,
         page,
         pageSize: filter.pageSize,
@@ -1003,7 +1139,7 @@ const make = Effect.gen(function* () {
         return yield* taskServiceError("tasks.deleteTask", "Only manual tasks can be deleted.");
       }
       yield* sql`
-        DELETE FROM task_comments
+        DELETE FROM task_notes
         WHERE task_id = ${input.taskId}
       `;
       yield* sql`
@@ -1016,21 +1152,21 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const addComment: TaskService["Service"]["addComment"] = (input) =>
+  const addNote: TaskService["Service"]["addNote"] = (input) =>
     Effect.gen(function* () {
       const task = yield* loadTaskById(input.taskId);
       const timestamp = yield* nowIso();
-      const commentId = yield* crypto.randomUUIDv4;
+      const noteId = yield* crypto.randomUUIDv4;
       yield* sql`
-        INSERT INTO task_comments (
-          comment_id,
+        INSERT INTO task_notes (
+          note_id,
           task_id,
           body,
           created_at,
           updated_at
         )
         VALUES (
-          ${commentId},
+          ${noteId},
           ${input.taskId},
           ${input.body},
           ${timestamp},
@@ -1045,7 +1181,7 @@ const make = Effect.gen(function* () {
       return yield* loadTaskById(input.taskId);
     }).pipe(
       Effect.mapError((cause) =>
-        taskServiceError("tasks.addComment", "Failed to add task comment", cause),
+        taskServiceError("tasks.addNote", "Failed to add task note", cause),
       ),
     );
 
@@ -1073,6 +1209,29 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError("tasks.getTaskAttachments", "Failed to load task attachments", cause),
+      ),
+    );
+
+  const getTaskComments: TaskService["Service"]["getTaskComments"] = (taskId) =>
+    Effect.gen(function* () {
+      const row = yield* loadTaskRowById(taskId);
+      // Manual tasks have nothing on ClickUp to ask for; answer empty without
+      // a network round trip (and without a token).
+      if (row.source !== "clickup" || !row.externalTaskId) {
+        return { comments: [] } satisfies TaskClickUpCommentsResult;
+      }
+      const token = yield* getClickUpToken;
+      if (!token) {
+        return { comments: [] } satisfies TaskClickUpCommentsResult;
+      }
+      const payload = yield* fetchClickUpComments({
+        externalTaskId: row.externalTaskId,
+        token,
+      });
+      return { comments: mapClickUpComments(payload) } satisfies TaskClickUpCommentsResult;
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.getTaskComments", "Failed to load task comments", cause),
       ),
     );
 
@@ -1289,8 +1448,9 @@ const make = Effect.gen(function* () {
     createManualTask,
     updateTask,
     deleteTask,
-    addComment,
+    addNote,
     getTaskAttachments,
+    getTaskComments,
     setClickUpToken,
     clearClickUpToken,
     getClickUpStatus,

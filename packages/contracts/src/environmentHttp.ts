@@ -34,12 +34,13 @@ import {
   OrchestrationThreadDetailSnapshot,
 } from "./orchestration.ts";
 import {
-  AddTaskCommentInput,
+  AddTaskNoteInput,
   CreateManualTaskInput,
   ClickUpConnectionStatus,
   DeleteTaskInput,
   Task,
   TaskAttachmentsResult,
+  TaskClickUpCommentsResult,
   TaskId,
   TaskLinksResult,
   TaskPanel,
@@ -101,7 +102,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_dispatch_failed",
   "tasks_panel_failed",
   "tasks_upsert_failed",
-  "tasks_comment_failed",
+  "tasks_note_failed",
   "tasks_clickup_failed",
   "internal_error",
 ]);
@@ -584,6 +585,10 @@ const EnvironmentTaskAttachmentsParams = Schema.Struct({
   taskId: TaskId,
 });
 
+const EnvironmentTaskCommentsParams = Schema.Struct({
+  taskId: TaskId,
+});
+
 export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
   .add(
     HttpApiEndpoint.get("panel", "/api/tasks/panel", {
@@ -632,9 +637,9 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("addComment", "/api/tasks/comments", {
+    HttpApiEndpoint.post("addNote", "/api/tasks/notes", {
       headers: OptionalBearerHeaders,
-      payload: AddTaskCommentInput,
+      payload: AddTaskNoteInput,
       success: Task,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
@@ -644,6 +649,14 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
       headers: OptionalBearerHeaders,
       params: EnvironmentTaskAttachmentsParams,
       success: TaskAttachmentsResult,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("taskComments", "/api/tasks/comments/:taskId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentTaskCommentsParams,
+      success: TaskClickUpCommentsResult,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

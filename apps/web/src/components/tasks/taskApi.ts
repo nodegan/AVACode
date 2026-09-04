@@ -8,6 +8,7 @@ import { ManagedRelay } from "@t3tools/client-runtime/relay";
 import type {
   Task,
   TaskAttachmentsResult,
+  TaskClickUpCommentsResult,
   TaskId,
   TaskLinksResult,
   TaskPanel,
@@ -131,6 +132,10 @@ export async function fetchThreadTask(
   return result.tasks[0] ?? null;
 }
 
+// Both detail fetches relay to ClickUp, whose latency spikes past the default
+// request timeout; give them a wider window.
+const CLICKUP_DETAIL_TIMEOUT_MS = 20_000;
+
 export async function fetchTaskAttachments(
   prepared: PreparedConnection,
   taskId: TaskId,
@@ -139,11 +144,34 @@ export async function fetchTaskAttachments(
     prepared.httpBaseUrl,
     `/api/tasks/attachments/${taskId}`,
   );
-  return runTasksRequest(prepared, requestUrl, "GET", (client, headers) =>
-    client.tasks.taskAttachments({
-      params: { taskId },
-      headers,
-    }),
+  return runTasksRequest(
+    prepared,
+    requestUrl,
+    "GET",
+    (client, headers) =>
+      client.tasks.taskAttachments({
+        params: { taskId },
+        headers,
+      }),
+    CLICKUP_DETAIL_TIMEOUT_MS,
+  );
+}
+
+export async function fetchTaskComments(
+  prepared: PreparedConnection,
+  taskId: TaskId,
+): Promise<TaskClickUpCommentsResult> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, `/api/tasks/comments/${taskId}`);
+  return runTasksRequest(
+    prepared,
+    requestUrl,
+    "GET",
+    (client, headers) =>
+      client.tasks.taskComments({
+        params: { taskId },
+        headers,
+      }),
+    CLICKUP_DETAIL_TIMEOUT_MS,
   );
 }
 
@@ -161,14 +189,14 @@ export async function setTaskLinkedThread(
   );
 }
 
-export async function addTaskComment(
+export async function addTaskNote(
   prepared: PreparedConnection,
   taskId: TaskId,
   body: string,
 ): Promise<void> {
-  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/comments");
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/notes");
   await runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
-    client.tasks.addComment({
+    client.tasks.addNote({
       headers,
       payload: { taskId, body },
     }),

@@ -34,7 +34,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import {
-  addTaskComment,
+  addTaskNote,
   fetchTaskPanel,
   fetchTasksQuery,
   setTaskLinkedThread,
@@ -44,7 +44,7 @@ import { deleteTask as deleteTaskRequest } from "./taskApi";
 import {
   TaskDetailsActions,
   TaskDetailsBody,
-  TaskCommentComposer,
+  TaskNoteComposer,
   TaskStatusBadge,
 } from "./TaskDetailsDialog";
 import { notifyTasksChanged, requestTaskPanelView, useTaskPanelViewRequest } from "./taskLinkStore";
@@ -178,7 +178,7 @@ function TaskCard(props: TaskCardProps) {
         ) : null}
         <span className="ml-auto inline-flex shrink-0 items-center gap-1">
           <MessageSquareIcon className="size-3" />
-          {task.comments.length}
+          {task.notes.length}
         </span>
         <span className="inline-flex shrink-0 items-center gap-0.5">
           {task.linkedThreadId ? (
@@ -301,7 +301,7 @@ export function TasksPanel(props: {
   const [panel, setPanel] = useState<TaskPanel | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [detailTask, setDetailTask] = useState<Task | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -503,16 +503,16 @@ export function TasksPanel(props: {
     [setTaskLink],
   );
 
-  const addComment = useCallback(
+  const addNote = useCallback(
     (taskId: TaskId) => {
-      const body = commentDrafts[taskId]?.trim();
+      const body = noteDrafts[taskId]?.trim();
       if (!body) return;
-      void runMutation(`comment:${taskId}`, async (connection) => {
-        await addTaskComment(connection, taskId, body);
-        setCommentDrafts((current) => ({ ...current, [taskId]: "" }));
+      void runMutation(`note:${taskId}`, async (connection) => {
+        await addTaskNote(connection, taskId, body);
+        setNoteDrafts((current) => ({ ...current, [taskId]: "" }));
       });
     },
-    [commentDrafts, runMutation],
+    [noteDrafts, runMutation],
   );
 
   const deleteTask = useCallback(
@@ -916,14 +916,14 @@ export function TasksPanel(props: {
         </ScrollArea>
         {detailTask ? (
           <div className="border-t bg-muted/72 p-4">
-            <TaskCommentComposer
+            <TaskNoteComposer
               task={detailTask}
               busyKey={busyKey}
-              commentDraft={commentDrafts[detailTask.id] ?? ""}
-              onCommentDraftChange={(value) => {
-                setCommentDrafts((current) => ({ ...current, [detailTask.id]: value }));
+              noteDraft={noteDrafts[detailTask.id] ?? ""}
+              onNoteDraftChange={(value) => {
+                setNoteDrafts((current) => ({ ...current, [detailTask.id]: value }));
               }}
-              onAddComment={() => addComment(detailTask.id)}
+              onAddNote={() => addNote(detailTask.id)}
             />
           </div>
         ) : null}
