@@ -21,8 +21,9 @@ export default defineConfig({
     testTimeout: 60_000,
   },
   staged: {
-    // Formatter only for now — no lint or typecheck on commit.
-    "*": "vp fmt",
+    // Formatter only for now — no lint or typecheck on commit. Binary-only
+    // commits leave the formatter no targets, so don't error on that.
+    "*": "vp fmt --no-error-on-unmatched-pattern",
   },
   fmt: {
     ignorePatterns: [
