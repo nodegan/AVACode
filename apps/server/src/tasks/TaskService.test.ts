@@ -208,6 +208,7 @@ interface SeedTask {
   readonly folderName?: string;
   readonly statusCategory?: string;
   readonly assignees?: ReadonlyArray<string>;
+  readonly customId?: string;
 }
 
 const assigneesJson = (assignees: ReadonlyArray<string>): string => JSON.stringify(assignees);
@@ -253,6 +254,7 @@ const seedTasks = Effect.fn("seedTasks")(function* (tasks: ReadonlyArray<SeedTas
         linked_thread_id,
         list_id,
         external_task_id,
+        external_custom_id,
         external_url,
         assignees_json,
         synced_at,
@@ -270,6 +272,7 @@ const seedTasks = Effect.fn("seedTasks")(function* (tasks: ReadonlyArray<SeedTas
         ${null},
         ${listId},
         ${listId === null ? null : String(900000 + index)},
+        ${task.customId ?? null},
         ${listId === null ? null : `https://app.clickup.com/t/${900000 + index}`},
         ${assigneesJson(task.assignees ?? [])},
         ${null},
@@ -451,6 +454,49 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       });
       assert.strictEqual(combined.total, 1);
       assert.ok(combined.tasks.every((task) => task.title === "B"));
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("queryTasks searches by title and provider ids", () =>
+    Effect.gen(function* () {
+      yield* seedTasks([
+        { title: "Fix login flake", listId: "list-a", listName: "Alpha" },
+        { title: "Unrelated", listId: "list-a", listName: "Alpha", customId: "PR-1685" },
+        { title: "Polish onboarding", listId: "list-b", listName: "Beta" },
+        { title: "Manual chore for 900001" },
+      ]);
+
+      const service = yield* TaskService;
+
+      const byTitle = yield* service.queryTasks({ filter: { query: "onboarding" } });
+      assert.deepStrictEqual(
+        byTitle.tasks.map((task) => task.title),
+        ["Polish onboarding"],
+      );
+
+      // The human-facing ClickUp custom id matches case-insensitively.
+      const byCustomId = yield* service.queryTasks({ filter: { query: "pr-1685" } });
+      assert.strictEqual(byCustomId.total, 1);
+      assert.ok(byCustomId.tasks.every((task) => task.externalCustomId === "PR-1685"));
+
+      // A raw external id matches its synced task, and the same digits inside
+      // a manual task's title still surface — the match is a union.
+      const byExternalId = yield* service.queryTasks({ filter: { query: "900001" } });
+      assert.deepStrictEqual(byExternalId.tasks.map((task) => task.title).sort(), [
+        "Manual chore for 900001",
+        "Unrelated",
+      ]);
+
+      // Blank or whitespace queries are not filters at all.
+      const blank = yield* service.queryTasks({ filter: { query: "   " } });
+      assert.strictEqual(blank.total, 4);
+
+      // Search composes with the other filters.
+      const scoped = yield* service.queryTasks({
+        filter: { listIds: ["clickup:list-a"], query: "unrelated" },
+      });
+      assert.strictEqual(scoped.total, 1);
+      assert.ok(scoped.tasks.every((task) => task.title === "Unrelated"));
     }).pipe(Effect.provide(TestLayers)),
   );
 

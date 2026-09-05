@@ -245,6 +245,8 @@ export const TaskQueryFilter = Schema.Struct({
   statuses: Schema.optional(Schema.Array(TaskStatusCategory)),
   assignees: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   linkedThreadId: Schema.optional(ThreadId),
+  /** Free-text search over title and provider ids (ClickUp custom id, external id). */
+  query: Schema.optional(TrimmedString),
   page: Schema.optional(Schema.Number),
   pageSize: Schema.optional(Schema.Number),
 });

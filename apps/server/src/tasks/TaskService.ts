@@ -113,6 +113,7 @@ interface NormalizedTaskQueryFilter {
   readonly statuses: ReadonlyArray<TaskStatusCategory>;
   readonly assignees: ReadonlyArray<string>;
   readonly linkedThreadId: string | null;
+  readonly query: string | null;
   readonly page: number;
   readonly pageSize: number;
 }
@@ -317,6 +318,7 @@ const make = Effect.gen(function* () {
       statuses: [...new Set(filter?.statuses ?? [])],
       assignees: dedupe(filter?.assignees ?? []),
       linkedThreadId: filter?.linkedThreadId?.trim() || null,
+      query: filter?.query?.trim() || null,
       page: Math.max(1, Math.floor(filter?.page ?? 1)),
       pageSize: Math.min(
         TASK_PAGE_SIZE_MAX,
@@ -361,6 +363,17 @@ const make = Effect.gen(function* () {
     }
     if (filter.linkedThreadId) {
       clauses.push(sql`linked_thread_id = ${filter.linkedThreadId}`);
+    }
+    if (filter.query) {
+      // Union match so manual tasks (no provider ids) still match on title.
+      const needle = `%${filter.query.replace(/[\\%_]/g, "\\$&")}%`;
+      clauses.push(
+        sql`(
+          tasks.title LIKE ${needle} ESCAPE '\\'
+          OR tasks.external_custom_id LIKE ${needle} ESCAPE '\\'
+          OR tasks.external_task_id LIKE ${needle} ESCAPE '\\'
+        )`,
+      );
     }
     return sql.and(clauses);
   };

@@ -93,6 +93,8 @@ interface TaskPanelThreadContext {
 }
 
 const TASKS_PAGE_SIZE = 10;
+// Typing in the search box waits for this quiet period before querying.
+const TASK_SEARCH_DEBOUNCE_MS = 150;
 // How often the visible view re-reads the local task store while the panel is open.
 const VIEW_POLL_INTERVAL_MS = 10_000;
 // Opening the panel on data older than this quietly starts a background sync.
@@ -364,6 +366,8 @@ export function TasksPanel(props: {
   const [listSearch, setListSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatusCategory | "all">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
+  const [taskSearchInput, setTaskSearchInput] = useState("");
+  const [taskSearchQuery, setTaskSearchQuery] = useState("");
   const [page, setPage] = useState(1);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [createTaskOpen, setCreateTaskOpen] = useState(false);
@@ -418,16 +422,26 @@ export function TasksPanel(props: {
     [prepared],
   );
 
-  const queryFilter = useMemo<TaskQueryFilter>(
-    () => ({
+  // Debounced task search: landing on a new query restarts pagination.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setTaskSearchQuery(taskSearchInput);
+      setPage(1);
+    }, TASK_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [taskSearchInput]);
+
+  const queryFilter = useMemo<TaskQueryFilter>(() => {
+    const query = taskSearchQuery.trim();
+    return {
       listIds: listSelection.kind === "list" ? [listSelection.listId] : [],
       statuses: statusFilter === "all" ? [] : [statusFilter],
       assignees: assigneeFilter === "all" ? [] : [assigneeFilter],
+      query: query.length > 0 ? query : undefined,
       page,
       pageSize: TASKS_PAGE_SIZE,
-    }),
-    [assigneeFilter, listSelection, page, statusFilter],
-  );
+    };
+  }, [assigneeFilter, listSelection, page, statusFilter, taskSearchQuery]);
 
   const loadTasks = useCallback(
     async (silent = false) => {
@@ -1360,7 +1374,8 @@ export function TasksPanel(props: {
   if (view === "tasks") {
     const activeTitle =
       listSelection.kind === "list" ? (activeList?.name ?? "Task list") : "All tasks";
-    const filtersActive = statusFilter !== "all" || assigneeFilter !== "all";
+    const filtersActive =
+      statusFilter !== "all" || assigneeFilter !== "all" || taskSearchQuery.trim().length > 0;
     return (
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-5 p-4">
@@ -1388,6 +1403,14 @@ export function TasksPanel(props: {
           </section>
 
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
+
+          <Input
+            type="search"
+            value={taskSearchInput}
+            onChange={(event) => setTaskSearchInput(event.target.value)}
+            placeholder="Search by name or ID…"
+            aria-label="Search tasks"
+          />
 
           <div className="grid grid-cols-2 gap-2">
             <Select
