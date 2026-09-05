@@ -15,7 +15,8 @@ import {
 import * as ServerSecretStoreModule from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
-import { mapClickUpAttachments, mapClickUpComments, TaskService } from "./TaskService.ts";
+import { mapClickUpAttachments, mapClickUpComments } from "./providers/clickup.ts";
+import { TaskService } from "./TaskService.ts";
 import { TaskServiceLive } from "./TaskService.ts";
 
 const ConfigLayer = Layer.fresh(
@@ -195,6 +196,10 @@ const SyncTestLayers = TaskServiceLive.pipe(
   Layer.provideMerge(SqlitePersistenceMemory),
 );
 
+const CLICKUP = "clickup";
+
+const describePanel = (panel: TaskPanel): string => JSON.stringify(panel);
+
 interface SeedTask {
   readonly title: string;
   readonly listId?: string;
@@ -207,27 +212,48 @@ interface SeedTask {
 
 const assigneesJson = (assignees: ReadonlyArray<string>): string => JSON.stringify(assignees);
 
-const describePanel = (panel: TaskPanel): string => JSON.stringify(panel);
-
+/**
+ * Seeds a synced task plus the first-class list/folder rows it belongs to.
+ * Registry row ids are the deterministic "provider:external" ids the sync
+ * writes, so filter assertions can reference them directly.
+ */
 const seedTasks = Effect.fn("seedTasks")(function* (tasks: ReadonlyArray<SeedTask>) {
   const sql = yield* SqlClient.SqlClient;
+  const seededListIds = new Set<string>();
   for (const [index, task] of tasks.entries()) {
+    let listId: string | null = null;
+    if (task.listId !== undefined) {
+      listId = `${CLICKUP}:${task.listId}`;
+      if (!seededListIds.has(listId)) {
+        seededListIds.add(listId);
+        const folderId = task.folderId ? `${CLICKUP}:${task.folderId}` : null;
+        if (folderId && task.folderName) {
+          yield* sql`
+            INSERT INTO task_folders (folder_id, provider, external_folder_id, name, created_at, updated_at)
+            VALUES (${folderId}, ${CLICKUP}, ${task.folderId}, ${task.folderName}, ${"2026-09-03T00:00:00.000Z"}, ${"2026-09-03T00:00:00.000Z"})
+            ON CONFLICT (folder_id) DO NOTHING
+          `;
+        }
+        yield* sql`
+          INSERT INTO task_lists (list_id, provider, external_list_id, folder_id, name, created_at, updated_at)
+          VALUES (${listId}, ${CLICKUP}, ${task.listId}, ${folderId}, ${task.listName ?? task.listId}, ${"2026-09-03T00:00:00.000Z"}, ${"2026-09-03T00:00:00.000Z"})
+          ON CONFLICT (list_id) DO NOTHING
+        `;
+      }
+    }
     const taskId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${String(index).padStart(12, "0")}`);
     yield* sql`
       INSERT INTO tasks (
         task_id,
-        source,
+        provider,
         title,
         description,
         status_label,
         status_category,
         linked_thread_id,
+        list_id,
         external_task_id,
         external_url,
-        external_list_id,
-        external_list_name,
-        external_folder_id,
-        external_folder_name,
         assignees_json,
         synced_at,
         external_updated_at,
@@ -236,18 +262,15 @@ const seedTasks = Effect.fn("seedTasks")(function* (tasks: ReadonlyArray<SeedTas
       )
       VALUES (
         ${taskId},
-        ${task.listId === undefined ? "manual" : "clickup"},
+        ${listId === null ? "manual" : CLICKUP},
         ${task.title},
         ${""},
         ${"To do"},
         ${task.statusCategory ?? "open"},
         ${null},
-        ${task.listId === undefined ? null : String(900000 + index)},
-        ${task.listId === undefined ? null : `https://app.clickup.com/t/${900000 + index}`},
-        ${task.listId ?? null},
-        ${task.listName ?? null},
-        ${task.folderId ?? null},
-        ${task.folderName ?? null},
+        ${listId},
+        ${listId === null ? null : String(900000 + index)},
+        ${listId === null ? null : `https://app.clickup.com/t/${900000 + index}`},
         ${assigneesJson(task.assignees ?? [])},
         ${null},
         ${null},
@@ -261,22 +284,26 @@ const seedTasks = Effect.fn("seedTasks")(function* (tasks: ReadonlyArray<SeedTas
 
 const seedManyClickUpTasks = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    INSERT INTO task_lists (list_id, provider, external_list_id, folder_id, name, created_at, updated_at)
+    VALUES (${`${CLICKUP}:901501926053`}, ${CLICKUP}, '901501926053', null, 'Sprint Backlog', ${"2026-09-03T00:00:00.000Z"}, ${"2026-09-03T00:00:00.000Z"})
+    ON CONFLICT (list_id) DO NOTHING
+  `;
   const count = 1000;
   for (let i = 0; i < count; i++) {
     const taskId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${String(i).padStart(12, "0")}`);
     yield* sql`
       INSERT INTO tasks (
         task_id,
-        source,
+        provider,
         title,
         description,
         status_label,
         status_category,
         linked_thread_id,
+        list_id,
         external_task_id,
         external_url,
-        external_list_id,
-        external_list_name,
         assignees_json,
         synced_at,
         external_updated_at,
@@ -285,16 +312,15 @@ const seedManyClickUpTasks = Effect.gen(function* () {
       )
       VALUES (
         ${taskId},
-        ${"clickup"},
+        ${CLICKUP},
         ${`Task ${i}`},
         ${""},
         ${"To do"},
         ${"open"},
         ${null},
+        ${`${CLICKUP}:901501926053`},
         ${String(900000 + i)},
         ${`https://app.clickup.com/t/${900000 + i}`},
-        ${"901501926053"},
-        ${"Sprint Backlog"},
         ${"[]"},
         ${null},
         ${null},
@@ -307,7 +333,7 @@ const seedManyClickUpTasks = Effect.gen(function* () {
 });
 
 it.layer(NodeServices.layer)("TaskService", (it) => {
-  it.effect("getPanel returns facets instead of the full task list", () =>
+  it.effect("getPanel returns providers and facets instead of the full task list", () =>
     Effect.gen(function* () {
       yield* seedTasks([
         {
@@ -341,9 +367,10 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       const panel = yield* service.getPanel();
       assert.deepStrictEqual(
         panel.facets.lists.map(
-          (list) => `${list.id}:${list.name}:${list.count}:${list.folderName ?? ""}`,
+          (list) =>
+            `${list.id}:${list.provider}:${list.name}:${list.count}:${list.folderName ?? ""}`,
         ),
-        ["list-a:Alpha:2:AVA", "list-b:Beta:1:AME"],
+        ["clickup:list-a:clickup:Alpha:2:AVA", "clickup:list-b:clickup:Beta:1:AME"],
       );
       assert.deepStrictEqual(
         panel.facets.statuses.map((status) => `${status.value}:${status.count}`),
@@ -353,7 +380,12 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
         panel.facets.assignees.map((assignee) => `${assignee.value}:${assignee.count}`),
         ["Ana:1", "Bo:1"],
       );
-      assert.strictEqual(panel.clickup.syncConfig, null);
+      assert.deepStrictEqual(
+        panel.providers.map(
+          (provider) => `${provider.providerId}:${provider.credentialConfigured}`,
+        ),
+        ["clickup:false"],
+      );
     }).pipe(Effect.provide(TestLayers)),
   );
 
@@ -368,7 +400,7 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       assert.strictEqual(result.tasks.length, 10);
       assert.strictEqual(result.page, 1);
       assert.ok(result.tasks.some((task) => task.title === "Task 0"));
-      assert.ok(result.tasks.every((task) => task.externalListName === "Sprint Backlog"));
+      assert.ok(result.tasks.every((task) => task.listName === "Sprint Backlog"));
       assert.deepStrictEqual(result.tasks[0]?.assignees, []);
 
       const lastPage = yield* service.queryTasks({
@@ -398,10 +430,10 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       const service = yield* TaskService;
 
       const byList = yield* service.queryTasks({
-        filter: { listIds: ["list-a"] },
+        filter: { listIds: ["clickup:list-a"] },
       });
       assert.strictEqual(byList.total, 2);
-      assert.ok(byList.tasks.every((task) => task.externalListId === "list-a"));
+      assert.ok(byList.tasks.every((task) => task.listId === "clickup:list-a"));
 
       const byStatus = yield* service.queryTasks({
         filter: { statuses: ["open"] },
@@ -415,14 +447,14 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       assert.ok(byAssignee.tasks.every((task) => task.assignees.includes("Ana")));
 
       const combined = yield* service.queryTasks({
-        filter: { listIds: ["list-a"], statuses: ["done"] },
+        filter: { listIds: ["clickup:list-a"], statuses: ["done"] },
       });
       assert.strictEqual(combined.total, 1);
       assert.ok(combined.tasks.every((task) => task.title === "B"));
     }).pipe(Effect.provide(TestLayers)),
   );
 
-  it.effect("queryTasks filters by folder denormalized on tasks", () =>
+  it.effect("queryTasks filters by folder resolved through its lists", () =>
     Effect.gen(function* () {
       yield* seedTasks([
         {
@@ -452,18 +484,18 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       const service = yield* TaskService;
 
       const byFolder = yield* service.queryTasks({
-        filter: { folderIds: ["folder-ava"] },
+        filter: { folderIds: ["clickup:folder-ava"] },
       });
       assert.strictEqual(byFolder.total, 2);
-      assert.ok(byFolder.tasks.every((task) => task.externalListId !== "list-b"));
+      assert.ok(byFolder.tasks.every((task) => task.listId !== "clickup:list-b"));
 
       const byBothFolders = yield* service.queryTasks({
-        filter: { folderIds: ["folder-ava", "folder-ame"] },
+        filter: { folderIds: ["clickup:folder-ava", "clickup:folder-ame"] },
       });
       assert.strictEqual(byBothFolders.total, 3);
 
       const folderOrList = yield* service.queryTasks({
-        filter: { listIds: ["list-b"], folderIds: ["folder-ava"] },
+        filter: { listIds: ["clickup:list-b"], folderIds: ["clickup:folder-ava"] },
       });
       assert.strictEqual(folderOrList.total, 3);
     }).pipe(Effect.provide(TestLayers)),
@@ -497,6 +529,7 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       const links = yield* service.listLinks();
       assert.strictEqual(links.links.length, 2);
       assert.ok(links.links.every((link) => link.threadId === threadA));
+      assert.ok(links.links.every((link) => link.provider === "manual"));
     }).pipe(Effect.provide(TestLayers)),
   );
 
@@ -525,50 +558,232 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       assert.strictEqual(unknownOnly.total, 0);
     }).pipe(Effect.provide(TestLayers)),
   );
+
+  it.effect("manual tasks can join any list and unknown lists are rejected", () =>
+    Effect.gen(function* () {
+      yield* seedTasks([{ title: "Synced", listId: "list-a", listName: "Alpha" }]);
+
+      const service = yield* TaskService;
+      const created = yield* service.createManualTask({
+        title: "Local follow-up",
+        listId: "clickup:list-a",
+      });
+      assert.strictEqual(created.provider, "manual");
+      assert.strictEqual(created.listId, "clickup:list-a");
+      assert.strictEqual(created.listName, "Alpha");
+
+      const unknown = yield* Effect.result(
+        service.createManualTask({ title: "Lost", listId: "clickup:missing" }),
+      );
+      assert.strictEqual(unknown._tag, "Failure");
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("createList registers a local list visible in facets", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskService;
+      const list = yield* service.createList({ name: "Personal" });
+      assert.strictEqual(list.provider, "manual");
+      assert.strictEqual(list.name, "Personal");
+
+      const created = yield* service.createManualTask({
+        title: "Just mine",
+        listId: list.id,
+      });
+      assert.strictEqual(created.listId, list.id);
+      assert.strictEqual(created.listName, "Personal");
+
+      const panel = yield* service.getPanel();
+      assert.deepStrictEqual(
+        panel.facets.lists.map((facet) => `${facet.provider}:${facet.name}:${facet.count}`),
+        [`manual:Personal:1`],
+      );
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("manual folders nest lists and surface in facets", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const service = yield* TaskService;
+
+      const folder = yield* service.createFolder({ name: "Project X" });
+      assert.strictEqual(folder.provider, "manual");
+      assert.strictEqual(folder.externalFolderId, null);
+
+      const nested = yield* service.createList({ name: "Sprint", folderId: folder.id });
+      assert.strictEqual(nested.folderId, folder.id);
+
+      const created = yield* service.createManualTask({
+        title: "Nested task",
+        listId: nested.id,
+      });
+      assert.strictEqual(created.listId, nested.id);
+      assert.strictEqual(created.listName, "Sprint");
+
+      const panel = yield* service.getPanel();
+      assert.deepStrictEqual(
+        panel.facets.folders.map((facet) => `${facet.provider}:${facet.name}:${facet.count}`),
+        [`manual:Project X:1`],
+      );
+      assert.deepStrictEqual(
+        panel.facets.lists.map((facet) => `${facet.name}:${facet.folderId}`),
+        [`Sprint:${folder.id}`],
+      );
+
+      const unknownFolder = yield* Effect.result(
+        service.createList({ name: "Lost", folderId: "nope" }),
+      );
+      assert.strictEqual(unknownFolder._tag, "Failure");
+
+      // A manual list cannot nest under a provider's folder; those belong to
+      // the provider's own sync.
+      yield* sql`
+        INSERT INTO task_folders (folder_id, provider, external_folder_id, name, created_at, updated_at)
+        VALUES ('clickup:ext-folder', 'clickup', 'ext-folder', 'Provider Folder', '2026-01-01', '2026-01-01')
+      `;
+      const providerFolder = yield* Effect.result(
+        service.createList({ name: "Mismatched", folderId: "clickup:ext-folder" }),
+      );
+      assert.strictEqual(providerFolder._tag, "Failure");
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("deleteList takes the list's tasks and notes with it", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const service = yield* TaskService;
+      const doomed = yield* service.createList({ name: "Doomed" });
+      const keeper = yield* service.createList({ name: "Keeper" });
+      const doomedTask = yield* service.createManualTask({ title: "Inside", listId: doomed.id });
+      yield* service.addNote({ taskId: doomedTask.id, body: "note" });
+      yield* service.createManualTask({ title: "Elsewhere", listId: keeper.id });
+
+      yield* service.deleteList({ listId: doomed.id });
+
+      const left = yield* service.queryTasks({});
+      assert.deepStrictEqual(
+        left.tasks.map((task) => task.title),
+        ["Elsewhere"],
+      );
+      const notes =
+        yield* sql`SELECT COUNT(*) AS "c" FROM task_notes WHERE task_id = ${doomedTask.id}`;
+      assert.strictEqual(notes[0]?.c, 0);
+      const listRows =
+        yield* sql`SELECT COUNT(*) AS "c" FROM task_lists WHERE list_id = ${doomed.id}`;
+      assert.strictEqual(listRows[0]?.c, 0);
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("deleteFolder recursively removes nested lists, tasks, and notes", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const service = yield* TaskService;
+      const folder = yield* service.createFolder({ name: "Project X" });
+      const doomedList = yield* service.createList({ name: "Doomed", folderId: folder.id });
+      const survivingList = yield* service.createList({ name: "Survivor" });
+      const doomedTask = yield* service.createManualTask({
+        title: "Doomed task",
+        listId: doomedList.id,
+      });
+      yield* service.addNote({ taskId: doomedTask.id, body: "bye" });
+      yield* service.createManualTask({ title: "Survivor task", listId: survivingList.id });
+
+      yield* service.deleteFolder({ folderId: folder.id });
+
+      const panel = yield* service.getPanel();
+      assert.deepStrictEqual(panel.facets.folders, []);
+      assert.deepStrictEqual(
+        panel.facets.lists.map((facet) => facet.name),
+        ["Survivor"],
+      );
+      const left = yield* service.queryTasks({});
+      assert.deepStrictEqual(
+        left.tasks.map((task) => task.title),
+        ["Survivor task"],
+      );
+      const notes =
+        yield* sql`SELECT COUNT(*) AS "c" FROM task_notes WHERE task_id = ${doomedTask.id}`;
+      assert.strictEqual(notes[0]?.c, 0);
+      const folderRows =
+        yield* sql`SELECT COUNT(*) AS "c" FROM task_folders WHERE folder_id = ${folder.id}`;
+      assert.strictEqual(folderRows[0]?.c, 0);
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("provider-backed lists and folders refuse deletion", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskService;
+      yield* seedTasks([
+        {
+          title: "Synced",
+          listId: "list-a",
+          listName: "Alpha",
+          folderId: "folder-a",
+          folderName: "Folder A",
+        },
+      ]);
+
+      const listDelete = yield* Effect.result(service.deleteList({ listId: `${CLICKUP}:list-a` }));
+      assert.strictEqual(listDelete._tag, "Failure");
+      const folderDelete = yield* Effect.result(
+        service.deleteFolder({ folderId: `${CLICKUP}:folder-a` }),
+      );
+      assert.strictEqual(folderDelete._tag, "Failure");
+
+      const panel = yield* service.getPanel();
+      assert.deepStrictEqual(
+        panel.facets.lists.map((facet) => facet.name),
+        ["Alpha"],
+      );
+    }).pipe(Effect.provide(TestLayers)),
+  );
 });
 
-it.live("getClickUpStatus reports workspace, last sync, and last error", () =>
+it.live("getProviderStatus reports account, last sync, and last error", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const service = yield* TaskService;
 
-    const bareStatus = yield* service.getClickUpStatus();
+    const bareStatus = yield* service.getProviderStatus({ providerId: CLICKUP });
     assert.deepStrictEqual(bareStatus, {
-      tokenConfigured: false,
-      workspaceName: null,
+      credentialConfigured: false,
+      accountLabel: null,
       lastSyncAt: null,
       lastSyncError: null,
     });
 
-    yield* service.setClickUpToken("pk_test_token");
-    // No sync row yet: the account name falls back to the token's first workspace.
-    const tokenOnlyStatus = yield* service.getClickUpStatus();
-    assert.strictEqual(tokenOnlyStatus.tokenConfigured, true);
-    assert.strictEqual(tokenOnlyStatus.workspaceName, "Test Workspace");
+    yield* service.setProviderCredential({ providerId: CLICKUP, token: "pk_test_token" });
+    // No config row yet: the account name falls back to the token's first workspace.
+    const tokenOnlyStatus = yield* service.getProviderStatus({ providerId: CLICKUP });
+    assert.strictEqual(tokenOnlyStatus.credentialConfigured, true);
+    assert.strictEqual(tokenOnlyStatus.accountLabel, "Test Workspace");
     assert.strictEqual(tokenOnlyStatus.lastSyncAt, null);
     assert.strictEqual(tokenOnlyStatus.lastSyncError, null);
 
     const syncedAt = DateTime.formatIso(DateTime.makeUnsafe(1567700000000));
     yield* sql`
-      INSERT INTO task_sync_config (id, provider, workspace_id, workspace_name, list_ids_json, last_sync_at, last_sync_error)
-      VALUES (1, 'clickup', '4679239', 'Persisted Workspace', '[]', ${syncedAt}, 'ClickUp exploded')
+      INSERT INTO task_provider_configs (provider, config_json, last_sync_at, last_sync_error)
+      VALUES ('clickup', '{"workspaceId":"4679239","workspaceName":"Persisted Workspace","listIds":[]}', ${syncedAt}, 'ClickUp exploded')
     `;
-    const persistedStatus = yield* service.getClickUpStatus();
-    assert.strictEqual(persistedStatus.tokenConfigured, true);
-    assert.strictEqual(persistedStatus.workspaceName, "Persisted Workspace");
+    const persistedStatus = yield* service.getProviderStatus({ providerId: CLICKUP });
+    assert.strictEqual(persistedStatus.credentialConfigured, true);
+    assert.strictEqual(persistedStatus.accountLabel, "Persisted Workspace");
     assert.strictEqual(persistedStatus.lastSyncAt, syncedAt);
     assert.strictEqual(persistedStatus.lastSyncError, "ClickUp exploded");
   }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
 );
 
-it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the background", () =>
+it.live("syncProviderTasks auto-bootstraps the config and syncs in the background", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const service = yield* TaskService;
-    yield* service.setClickUpToken("pk_test_token");
+    yield* service.setProviderCredential({ providerId: CLICKUP, token: "pk_test_token" });
 
-    const panel = yield* service.syncClickUpTasks();
-    assert.strictEqual(panel.clickup.tokenConfigured, true);
+    const panel: TaskPanel = yield* service.syncProviderTasks({ providerId: CLICKUP });
+    assert.deepStrictEqual(
+      panel.providers.map((provider) => provider.credentialConfigured),
+      [true],
+    );
 
     // The sync runs in a detached fiber; wait for its rows to land.
     let synced = false;
@@ -576,7 +791,7 @@ it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the backgro
       const rows = yield* sql<{ readonly c: number }>`
           SELECT COUNT(*) AS "c"
           FROM tasks
-          WHERE external_folder_name = ${"Mobile Squad"}
+          WHERE list_id = ${`${CLICKUP}:901501926053`}
         `;
       if ((rows[0]?.c ?? 0) >= 101) {
         synced = true;
@@ -588,12 +803,13 @@ it.live("syncClickUpTasks auto-bootstraps the workspace and syncs in the backgro
     assert.ok(synced, `detached sync did not write rows in time: ${describePanel(panelForDebug)}`);
 
     const syncedPanel = yield* service.getPanel();
-    assert.ok(syncedPanel.clickup.lastSyncAt !== null);
-    assert.strictEqual(syncedPanel.clickup.lastSyncError, null);
-    assert.strictEqual(syncedPanel.clickup.syncConfig?.workspaceId, "4679239");
-    assert.deepStrictEqual(syncedPanel.clickup.syncConfig?.listIds, []);
+    const clickupState = syncedPanel.providers.find((provider) => provider.providerId === CLICKUP);
+    assert.ok(clickupState?.lastSyncAt);
+    assert.strictEqual(clickupState.lastSyncError, null);
+    assert.strictEqual(clickupState.accountLabel, "Test Workspace");
+
     const byFolder = yield* service.queryTasks({
-      filter: { folderIds: ["folder-mobile-squad"], pageSize: 200 },
+      filter: { folderIds: [`${CLICKUP}:folder-mobile-squad`], pageSize: 200 },
     });
     assert.strictEqual(byFolder.total, 101);
     assert.ok(byFolder.tasks.some((task) => task.title === "Fix login bug"));
@@ -658,11 +874,11 @@ it.live("getTaskAttachments maps ClickUp attachments for a synced task", () =>
     const manualEmpty = yield* service.getTaskAttachments(manualId);
     assert.deepStrictEqual(manualEmpty, { attachments: [] });
 
-    // Without a token there is nothing to ask either.
+    // Without a credential there is nothing to ask either.
     const tokenless = yield* service.getTaskAttachments(clickupId);
     assert.deepStrictEqual(tokenless, { attachments: [] });
 
-    yield* service.setClickUpToken("pk_test_token");
+    yield* service.setProviderCredential({ providerId: CLICKUP, token: "pk_test_token" });
     const result = yield* service.getTaskAttachments(clickupId);
     assert.strictEqual(result.attachments.length, 2);
     const [image, file] = result.attachments;
@@ -725,11 +941,11 @@ it.live("getTaskComments threads ClickUp comments for a synced task", () =>
     const manualEmpty = yield* service.getTaskComments(manualId);
     assert.deepStrictEqual(manualEmpty, { comments: [] });
 
-    // Without a token there is nothing to ask either.
+    // Without a credential there is nothing to ask either.
     const tokenless = yield* service.getTaskComments(clickupId);
     assert.deepStrictEqual(tokenless, { comments: [] });
 
-    yield* service.setClickUpToken("pk_test_token");
+    yield* service.setProviderCredential({ providerId: CLICKUP, token: "pk_test_token" });
     const result = yield* service.getTaskComments(clickupId);
     // Pages join (the cursor chains on start_id), the thread replies hang off
     // their parent's endpoint, and empty entries drop out.
@@ -738,11 +954,12 @@ it.live("getTaskComments threads ClickUp comments for a synced task", () =>
       ["c-1:root", "r-1:c-1", "r-2:c-1", "c-2:root", "c-3:root"],
     );
     const [root, firstReply, secondReply, secondTop, third] = result.comments;
-    assert.strictEqual(root?.authorName, "Ana");
+    assert.ok(root && firstReply && secondReply && secondTop && third);
+    assert.strictEqual(root.authorName, "Ana");
     assert.strictEqual(root?.authorColor, "#7B68EE");
     assert.strictEqual(root?.authorAvatarUrl, "https://avatars.clickup.com/ana.png");
-    assert.strictEqual(firstReply?.body, "First reply");
-    assert.strictEqual(secondReply?.resolved, true);
+    assert.strictEqual(firstReply.body, "First reply");
+    assert.strictEqual(secondReply.resolved, true);
     // Replies sort between their parent and the later top-level comments.
     assert.ok(
       root.createdAt !== null &&

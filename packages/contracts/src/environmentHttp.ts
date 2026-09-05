@@ -36,17 +36,24 @@ import {
 import {
   AddTaskNoteInput,
   CreateManualTaskInput,
-  ClickUpConnectionStatus,
+  CreateTaskFolderInput,
+  CreateTaskListInput,
+  DeleteTaskFolderInput,
   DeleteTaskInput,
+  DeleteTaskListInput,
+  ProviderIdParams,
+  SetProviderCredentialInput,
   Task,
   TaskAttachmentsResult,
-  TaskClickUpCommentsResult,
+  TaskCommentsResult,
+  TaskFolder,
   TaskId,
   TaskLinksResult,
+  TaskList,
   TaskPanel,
+  TaskProviderConnectionStatus,
   TaskQueryResult,
   QueryTasksInput,
-  SetClickUpTokenInput,
   UpdateTaskInput,
 } from "./tasks.ts";
 import {
@@ -103,7 +110,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "tasks_panel_failed",
   "tasks_upsert_failed",
   "tasks_note_failed",
-  "tasks_clickup_failed",
+  "tasks_provider_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -656,35 +663,75 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
     HttpApiEndpoint.get("taskComments", "/api/tasks/comments/:taskId", {
       headers: OptionalBearerHeaders,
       params: EnvironmentTaskCommentsParams,
-      success: TaskClickUpCommentsResult,
+      success: TaskCommentsResult,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("setClickUpToken", "/api/tasks/clickup/token", {
+    HttpApiEndpoint.post("createList", "/api/tasks/lists", {
       headers: OptionalBearerHeaders,
-      payload: SetClickUpTokenInput,
+      payload: CreateTaskListInput,
+      success: TaskList,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createFolder", "/api/tasks/folders", {
+      headers: OptionalBearerHeaders,
+      payload: CreateTaskFolderInput,
+      success: TaskFolder,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("deleteList", "/api/tasks/lists/delete", {
+      headers: OptionalBearerHeaders,
+      payload: DeleteTaskListInput,
       success: Schema.Void,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("clearClickUpToken", "/api/tasks/clickup/token/remove", {
+    HttpApiEndpoint.post("deleteFolder", "/api/tasks/folders/delete", {
       headers: OptionalBearerHeaders,
+      payload: DeleteTaskFolderInput,
       success: Schema.Void,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.get("clickUpStatus", "/api/tasks/clickup/status", {
+    HttpApiEndpoint.post("setProviderCredential", "/api/tasks/providers/:providerId/credential", {
       headers: OptionalBearerHeaders,
-      success: ClickUpConnectionStatus,
+      params: ProviderIdParams,
+      payload: SetProviderCredentialInput,
+      success: Schema.Void,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("syncClickUpTasks", "/api/tasks/clickup/sync", {
+    HttpApiEndpoint.post(
+      "clearProviderCredential",
+      "/api/tasks/providers/:providerId/credential/remove",
+      {
+        headers: OptionalBearerHeaders,
+        params: ProviderIdParams,
+        success: Schema.Void,
+        error: EnvironmentHttpCommonError,
+      },
+    ).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("providerStatus", "/api/tasks/providers/:providerId/status", {
       headers: OptionalBearerHeaders,
+      params: ProviderIdParams,
+      success: TaskProviderConnectionStatus,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("syncProvider", "/api/tasks/providers/:providerId/sync", {
+      headers: OptionalBearerHeaders,
+      params: ProviderIdParams,
       success: TaskPanel,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),

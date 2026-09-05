@@ -6,6 +6,7 @@ import type {
   TaskId,
   TaskListFacet,
   TaskPanel,
+  TaskProviderState,
   TaskQueryFilter,
   TaskQueryResult,
   TaskStatusCategory,
@@ -19,14 +20,18 @@ import {
   ExternalLinkIcon,
   FolderIcon,
   FolderOpenIcon,
+  FolderPlusIcon,
   Link2Icon,
   LinkIcon,
   ListIcon,
+  ListPlusIcon,
   Loader2Icon,
   MessageSquareIcon,
+  PlusIcon,
   RefreshCwIcon,
   SettingsIcon,
   SquareCheckBigIcon,
+  Trash2Icon,
   UserIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -35,10 +40,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import {
   addTaskNote,
+  createManualTask,
+  createTaskFolder,
+  createTaskList,
+  deleteTaskFolder,
+  deleteTaskList,
   fetchTaskPanel,
   fetchTasksQuery,
   setTaskLinkedThread,
-  syncClickUpTasks,
+  syncProviderTasks,
 } from "./taskApi";
 import { deleteTask as deleteTaskRequest } from "./taskApi";
 import {
@@ -48,6 +58,14 @@ import {
   TaskStatusBadge,
 } from "./TaskDetailsDialog";
 import { notifyTasksChanged, requestTaskPanelView, useTaskPanelViewRequest } from "./taskLinkStore";
+import {
+  CreateFolderDialog,
+  CreateListDialog,
+  CreateTaskDialog,
+  DeleteTreeItemDialog,
+  type TaskListOptionGroup,
+  type TaskTreeDeleteTarget,
+} from "./TaskDialogs";
 import { waitForServerThreadDetail } from "../ChatView.logic";
 import { useRelativeTimeTick } from "~/components/settings/settingsLayout";
 import { Button } from "~/components/ui/button";
@@ -78,15 +96,29 @@ const TASKS_PAGE_SIZE = 10;
 // How often the visible view re-reads the local task store while the panel is open.
 const VIEW_POLL_INTERVAL_MS = 10_000;
 // Opening the panel on data older than this quietly starts a background sync.
-const CLICKUP_AUTO_SYNC_MAX_AGE_MS = 5 * 60_000;
+const PROVIDER_AUTO_SYNC_MAX_AGE_MS = 5 * 60_000;
 
 type ListSelection = { readonly kind: "all" } | { readonly kind: "list"; listId: string };
 
-interface TaskFolderGroup {
+interface TaskTreeFolder {
   id: string;
   name: string;
+  provider: string;
   count: number;
   lists: TaskListFacet[];
+}
+
+/**
+ * One top-level group in the browse tree: the manual section renders directly,
+ * while each provider's synced content collapses under a single folder node.
+ */
+interface TaskTreeSection {
+  key: string;
+  label: string;
+  isProvider: boolean;
+  folders: TaskTreeFolder[];
+  orphanLists: TaskListFacet[];
+  count: number;
 }
 
 const statusCategoryLabels: Record<TaskStatusCategory, string> = {
@@ -131,7 +163,7 @@ function TaskCard(props: TaskCardProps) {
     >
       <div className="flex items-center gap-2">
         <TaskStatusBadge task={task} />
-        {task.source === "manual" ? (
+        {task.provider === "manual" ? (
           <span className="rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground">
             Manual
           </span>
@@ -164,10 +196,10 @@ function TaskCard(props: TaskCardProps) {
             })}
           </span>
         </span>
-        {task.externalListName ? (
+        {task.listName ? (
           <span className="inline-flex min-w-0 items-center gap-1">
             <ListIcon className="size-3 shrink-0" />
-            <span className="truncate">{task.externalListName}</span>
+            <span className="truncate">{task.listName}</span>
           </span>
         ) : null}
         {task.assignees.length > 0 ? (
@@ -215,8 +247,8 @@ function TaskCard(props: TaskCardProps) {
               href={task.externalUrl}
               target="_blank"
               rel="noreferrer"
-              aria-label="Open in ClickUp"
-              title="Open in ClickUp"
+              aria-label="Open at the provider"
+              title="Open at the provider"
               className={cardActionClassName}
             >
               <ExternalLinkIcon className="size-3.5" />
@@ -256,14 +288,21 @@ function NavTreeRow(props: {
   count?: number;
   active?: boolean;
   trailing?: ReactNode;
+  /**
+   * Hover-revealed row actions. They take the trailing slot's place on the
+   * right, so the counter stays clear of them; the trailing chevron is
+   * dropped on such rows (the folder icon carries the expanded state).
+   */
+  actions?: ReactNode;
   onClick: () => void;
 }) {
-  return (
+  const row = (
     <button
       type="button"
       onClick={props.onClick}
       className={cn(
-        "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition",
+        "flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pl-2 pr-2 text-left text-sm transition",
+        props.actions && "pr-11",
         props.active
           ? "bg-accent text-foreground"
           : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -281,8 +320,17 @@ function NavTreeRow(props: {
       {typeof props.count === "number" ? (
         <span className="shrink-0 text-xs tabular-nums opacity-60">{props.count}</span>
       ) : null}
-      {props.trailing}
+      {props.actions ? null : props.trailing}
     </button>
+  );
+  if (!props.actions) return row;
+  return (
+    <div className="group/row relative flex w-full items-center">
+      {row}
+      <div className="pointer-events-none absolute inset-y-0 right-1 flex items-center opacity-0 transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100">
+        {props.actions}
+      </div>
+    </div>
   );
 }
 
@@ -312,14 +360,40 @@ export function TasksPanel(props: {
   const [tasksError, setTasksError] = useState<string | null>(null);
   const [listSelection, setListSelection] = useState<ListSelection>({ kind: "all" });
   const [view, setView] = useState<"browse" | "tasks" | "detail">("browse");
-  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
+  const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
   const [listSearch, setListSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatusCategory | "all">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [createTaskOpen, setCreateTaskOpen] = useState(false);
+  const [createListOpen, setCreateListOpen] = useState(false);
+  const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<TaskTreeDeleteTarget | null>(null);
+  // List ids a pending folder delete takes with it, so the current selection
+  // can be dropped if it points into the deleted subtree.
+  const deleteTargetListIdsRef = useRef<ReadonlyArray<string>>([]);
+  // Where the detail view was opened from, so deleting a task lands back there.
+  const viewBeforeDetailRef = useRef<"browse" | "tasks">("tasks");
 
-  const clickup = panel?.clickup ?? null;
-  const tokenConfigured = clickup?.tokenConfigured ?? false;
+  // Providers with a stored credential are syncable; today that is ClickUp,
+  // tomorrow Linear and friends.
+  const connectedProviders = useMemo<TaskProviderState[]>(
+    () => (panel?.providers ?? []).filter((provider) => provider.credentialConfigured),
+    [panel?.providers],
+  );
+  const syncStatusProvider = useMemo<TaskProviderState | null>(() => {
+    const connected = panel?.providers.filter((provider) => provider.credentialConfigured) ?? [];
+    return (
+      connected
+        .filter((provider) => provider.lastSyncAt !== null)
+        .toSorted((left, right) =>
+          (right.lastSyncAt ?? "").localeCompare(left.lastSyncAt ?? ""),
+        )[0] ??
+      connected[0] ??
+      null
+    );
+  }, [panel?.providers]);
 
   const loadPanel = useCallback(
     async (silent = false) => {
@@ -399,32 +473,37 @@ export function TasksPanel(props: {
     return () => clearInterval(id);
   }, [loadPanel, loadTasks]);
 
-  // The poll only refetches local rows; freshness from ClickUp comes from a
-  // background sync. Kick one quietly when the panel opens on stale data —
-  // the poll surfaces lastSyncAt/lastSyncError, so no toasts here.
-  const lastSyncAt = clickup?.lastSyncAt ?? null;
+  // The poll only refetches local rows; freshness from providers comes from
+  // background syncs. Kick one quietly per connected provider when the panel
+  // opens on stale data — the poll surfaces lastSyncAt/lastSyncError, so no
+  // toasts here.
+  const lastSyncAt = syncStatusProvider?.lastSyncAt ?? null;
   const autoSyncAttemptedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!tokenConfigured || busyKey === "clickup-sync") return;
-    const staleKey = lastSyncAt ?? "never";
+    if (busyKey === "provider-sync" || connectedProviders.length === 0) return;
+    const staleKey = connectedProviders.map((provider) => provider.lastSyncAt ?? "never").join("|");
     if (autoSyncAttemptedRef.current === staleKey) return;
-    const isStale =
-      lastSyncAt === null ||
-      Date.now() - new Date(lastSyncAt).getTime() > CLICKUP_AUTO_SYNC_MAX_AGE_MS;
+    const isStale = connectedProviders.some(
+      (provider) =>
+        provider.lastSyncAt === null ||
+        Date.now() - new Date(provider.lastSyncAt).getTime() > PROVIDER_AUTO_SYNC_MAX_AGE_MS,
+    );
     if (!isStale || prepared._tag === "None") return;
     autoSyncAttemptedRef.current = staleKey;
-    void syncClickUpTasks(prepared.value)
-      .then(() => loadPanel(true))
-      .catch(() => {
-        // A failed kick is reported by the next panel poll via lastSyncError.
-      });
-  }, [busyKey, lastSyncAt, loadPanel, prepared, tokenConfigured]);
+    for (const provider of connectedProviders) {
+      void syncProviderTasks(prepared.value, provider.providerId)
+        .then(() => loadPanel(true))
+        .catch(() => {
+          // A failed kick is reported by the next panel poll via lastSyncError.
+        });
+    }
+  }, [busyKey, connectedProviders, loadPanel, prepared]);
 
   const runMutation = useCallback(
     async (key: string, action: (prepared: PreparedConnection) => Promise<void | TaskPanel>) => {
       if (prepared._tag === "None") {
         setError("Waiting for an authenticated environment connection.");
-        return;
+        return false;
       }
       setBusyKey(key);
       setError(null);
@@ -437,15 +516,17 @@ export function TasksPanel(props: {
         }
         await loadTasks();
         notifyTasksChanged(props.environmentId);
+        return true;
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Task request failed.");
-        if (key === "clickup-sync" || key === "clickup-token") {
+        if (key === "provider-sync" || key === "provider-credential") {
           try {
             await loadPanel();
           } catch {
             // Keep the original mutation error visible if the follow-up refresh also fails.
           }
         }
+        return false;
       } finally {
         setBusyKey(null);
       }
@@ -454,13 +535,15 @@ export function TasksPanel(props: {
   );
 
   const syncNow = useCallback(() => {
-    void runMutation("clickup-sync", async (connection) => {
-      // The server starts the sync in a detached fiber and answers right away.
-      // Poll the panel until lastSyncAt moves (or an error lands) instead of
-      // holding this request open, where any hop can cut it.
-      await syncClickUpTasks(connection);
-      const initialLastSyncAt = panel?.clickup.lastSyncAt ?? null;
-      const initialLastSyncError = panel?.clickup.lastSyncError ?? null;
+    void runMutation("provider-sync", async (connection) => {
+      // The server starts each sync in a detached fiber and answers right
+      // away. Poll the panel until lastSyncAt moves (or an error lands)
+      // instead of holding this request open, where any hop can cut it.
+      for (const provider of connectedProviders) {
+        await syncProviderTasks(connection, provider.providerId);
+      }
+      const initialLastSyncAt = syncStatusProvider?.lastSyncAt ?? null;
+      const initialLastSyncError = syncStatusProvider?.lastSyncError ?? null;
       let latest = panel;
       for (let attempt = 0; attempt < 60; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -471,8 +554,11 @@ export function TasksPanel(props: {
           // A failed poll is transient; keep waiting for the sync to land.
           continue;
         }
-        const lastSyncAt = latest?.clickup.lastSyncAt ?? null;
-        const lastSyncError = latest?.clickup.lastSyncError ?? null;
+        const latestStatus = latest?.providers.find(
+          (provider) => provider.providerId === syncStatusProvider?.providerId,
+        );
+        const lastSyncAt = latestStatus?.lastSyncAt ?? null;
+        const lastSyncError = latestStatus?.lastSyncError ?? null;
         if (
           (lastSyncAt !== null && lastSyncAt !== initialLastSyncAt) ||
           (lastSyncError !== null && lastSyncError !== initialLastSyncError)
@@ -482,7 +568,7 @@ export function TasksPanel(props: {
       }
       return latest ?? undefined;
     });
-  }, [panel, runMutation]);
+  }, [connectedProviders, panel, runMutation, syncStatusProvider]);
 
   const setTaskLink = useCallback(
     (taskId: TaskId, linkedThreadId: ThreadId | null) => {
@@ -517,6 +603,11 @@ export function TasksPanel(props: {
 
   const deleteTask = useCallback(
     (taskId: TaskId) => {
+      // Leave the detail view at once and return to where it was opened
+      // from; the refresh below confirms the deletion, and a failure shows
+      // up as the panel's error line.
+      setSelectedTaskId((current) => (current === taskId ? null : current));
+      setView((current) => (current === "detail" ? viewBeforeDetailRef.current : current));
       void runMutation(`task-delete:${taskId}`, async (connection) => {
         await deleteTaskRequest(connection, taskId);
       });
@@ -585,11 +676,11 @@ export function TasksPanel(props: {
 
   const taskGroups = useMemo(() => {
     const tasks = tasksResult?.tasks ?? [];
-    const manual = tasks.filter((task) => task.source === "manual");
+    const manual = tasks.filter((task) => task.provider === "manual");
     const byList = new Map<string, Task[]>();
     for (const task of tasks) {
-      if (task.source !== "clickup") continue;
-      const key = task.externalListName ?? "ClickUp";
+      if (task.provider === "manual") continue;
+      const key = task.listName ?? "Provider";
       const bucket = byList.get(key);
       if (bucket) {
         bucket.push(task);
@@ -599,7 +690,9 @@ export function TasksPanel(props: {
     }
     return {
       manual,
-      clickupGroups: [...byList.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+      providerGroups: [...byList.entries()].toSorted(([left], [right]) =>
+        left.localeCompare(right),
+      ),
     };
   }, [tasksResult?.tasks]);
 
@@ -653,33 +746,94 @@ export function TasksPanel(props: {
   const totalPages = Math.max(1, Math.ceil(totalTasks / TASKS_PAGE_SIZE));
   const anyTasks = (facets?.statuses ?? []).some((facet) => facet.count > 0);
 
-  // ClickUp nests tasks as Workspace > Space > Folder > List > Task; facets
-  // carry the list level with its folder path, so the browse view shows
-  // folders with their lists nested underneath. Lists without a folder sit at
-  // the top level.
-  const listTree = useMemo(() => {
-    const folders = new Map<string, TaskFolderGroup>();
-    const orphans: TaskListFacet[] = [];
-    for (const list of facets?.lists ?? []) {
-      if (list.folderId && list.folderName) {
-        const folder = folders.get(list.folderId) ?? {
+  // Providers organize tasks as Workspace > Space > Folder > List > Task;
+  // facets carry the list level with its folder path. Manual folders/lists
+  // browse at the top level, and every provider's synced content collapses
+  // under one folder node so the two never mix.
+  const listTree = useMemo<TaskTreeSection[]>(() => {
+    const lists = facets?.lists ?? [];
+    const foldersById = new Map<string, TaskTreeFolder>();
+    for (const folder of facets?.folders ?? []) {
+      foldersById.set(folder.id, {
+        id: folder.id,
+        name: folder.name,
+        provider: folder.provider,
+        count: 0,
+        lists: [],
+      });
+    }
+    // A folder only surfaces through its lists on older servers that do not
+    // send the folders facet yet.
+    for (const list of lists) {
+      if (list.folderId && list.folderName && !foldersById.has(list.folderId)) {
+        foldersById.set(list.folderId, {
           id: list.folderId,
           name: list.folderName,
+          provider: list.provider,
           count: 0,
           lists: [],
-        };
-        folder.count += list.count;
-        folder.lists.push(list);
-        folders.set(list.folderId, folder);
-      } else {
-        orphans.push(list);
+        });
       }
     }
-    return {
-      folders: [...folders.values()].toSorted((left, right) => left.name.localeCompare(right.name)),
-      orphans,
+    const folderProvider = new Map<string, string>();
+    for (const folder of facets?.folders ?? []) folderProvider.set(folder.id, folder.provider);
+
+    const providerLabel = (providerId: string) =>
+      (panel?.providers ?? []).find((provider) => provider.providerId === providerId)?.label ??
+      providerId;
+
+    const manual: TaskTreeSection = {
+      key: "manual",
+      label: "Manual",
+      isProvider: false,
+      folders: [],
+      orphanLists: [],
+      count: 0,
     };
-  }, [facets?.lists]);
+    const providers = new Map<string, TaskTreeSection>();
+    const sectionFor = (providerId: string): TaskTreeSection => {
+      if (providerId === "manual") return manual;
+      const existing = providers.get(providerId);
+      if (existing) return existing;
+      const created: TaskTreeSection = {
+        key: `provider:${providerId}`,
+        label: providerLabel(providerId),
+        isProvider: true,
+        folders: [],
+        orphanLists: [],
+        count: 0,
+      };
+      providers.set(providerId, created);
+      return created;
+    };
+
+    for (const list of lists) {
+      const folder = list.folderId ? foldersById.get(list.folderId) : undefined;
+      if (folder) {
+        folder.lists.push(list);
+        folder.count += list.count;
+      } else {
+        sectionFor(list.provider).orphanLists.push(list);
+      }
+    }
+    for (const folder of foldersById.values()) {
+      const provider = folderProvider.get(folder.id) ?? folder.lists[0]?.provider ?? "manual";
+      sectionFor(provider).folders.push(folder);
+    }
+    const sections: TaskTreeSection[] = [manual, ...providers.values()];
+    for (const section of sections) {
+      section.folders.sort((left, right) => left.name.localeCompare(right.name));
+      section.orphanLists.sort((left, right) => left.name.localeCompare(right.name));
+      section.count =
+        section.folders.reduce((total, folder) => total + folder.count, 0) +
+        section.orphanLists.reduce((total, list) => total + list.count, 0);
+    }
+    sections.sort((left, right) => {
+      if (left.isProvider !== right.isProvider) return left.isProvider ? 1 : -1;
+      return left.label.localeCompare(right.label);
+    });
+    return sections;
+  }, [facets?.folders, facets?.lists, panel?.providers]);
 
   const listSearchQuery = listSearch.trim().toLowerCase();
   const matchesList = useCallback(
@@ -687,27 +841,86 @@ export function TasksPanel(props: {
       listSearchQuery.length === 0 || list.name.toLowerCase().includes(listSearchQuery),
     [listSearchQuery],
   );
-
-  const visibleFolders = useMemo(() => {
-    if (listSearchQuery.length === 0) return listTree.folders;
-    return listTree.folders.filter(
-      (folder) =>
-        folder.name.toLowerCase().includes(listSearchQuery) ||
-        folder.lists.some((list) => list.name.toLowerCase().includes(listSearchQuery)),
-    );
-  }, [listSearchQuery, listTree.folders]);
-
-  const visibleOrphans = useMemo(
-    () => listTree.orphans.filter(matchesList),
-    [listTree.orphans, matchesList],
+  const matchesFolder = useCallback(
+    (folder: TaskTreeFolder) =>
+      listSearchQuery.length === 0 ||
+      folder.name.toLowerCase().includes(listSearchQuery) ||
+      folder.lists.some(matchesList),
+    [listSearchQuery, matchesList],
   );
 
-  const browsableListCount =
-    listTree.folders.reduce((total, folder) => total + folder.lists.length, 0) +
-    listTree.orphans.length;
-  const allTasksCount =
-    listTree.folders.reduce((total, folder) => total + folder.count, 0) +
-    listTree.orphans.reduce((total, list) => total + list.count, 0);
+  const visibleSections = useMemo<TaskTreeSection[]>(() => {
+    if (listSearchQuery.length === 0) return listTree;
+    return listTree
+      .filter(
+        (section) =>
+          !section.isProvider ||
+          section.label.toLowerCase().includes(listSearchQuery) ||
+          section.folders.some(matchesFolder) ||
+          section.orphanLists.some(matchesList),
+      )
+      .map((section) => ({
+        ...section,
+        folders: section.folders.filter(matchesFolder).map((folder) => {
+          const matchingLists = folder.lists.filter(matchesList);
+          return {
+            ...folder,
+            lists: matchingLists.length === 0 ? folder.lists : matchingLists,
+          };
+        }),
+        orphanLists: section.orphanLists.filter(matchesList),
+      }));
+  }, [listSearchQuery, listTree, matchesFolder, matchesList]);
+
+  const manualSection = visibleSections.find((section) => !section.isProvider) ?? null;
+  const providerSections = useMemo(
+    () => visibleSections.filter((section) => section.isProvider),
+    [visibleSections],
+  );
+
+  const manualFolders = useMemo(
+    () => (facets?.folders ?? []).filter((folder) => folder.provider === "manual"),
+    [facets?.folders],
+  );
+
+  // Task-create target groups: every list, labeled by its folder path so a
+  // ClickUp list and a manual list with the same name stay distinguishable.
+  const taskOptionGroups = useMemo<TaskListOptionGroup[]>(() => {
+    const lists = facets?.lists ?? [];
+    const folderLabel = (list: TaskListFacet): string => {
+      if (!list.folderId) return "No folder";
+      const provider =
+        (facets?.folders ?? []).find((folder) => folder.id === list.folderId)?.provider ??
+        list.provider;
+      const folderName =
+        (facets?.folders ?? []).find((folder) => folder.id === list.folderId)?.name ??
+        list.folderName ??
+        "";
+      if (provider === "manual" || list.provider === "manual") return folderName;
+      const label =
+        (panel?.providers ?? []).find((candidate) => candidate.providerId === provider)?.label ??
+        provider;
+      return `${label} / ${folderName}`;
+    };
+    const groups = new Map<string, { id: string; label: string; lists: TaskListFacet[] }>();
+    for (const list of lists) {
+      const key = list.folderId ?? "none";
+      const group = groups.get(key);
+      if (group) {
+        group.lists.push(list);
+      } else {
+        groups.set(key, { id: key, label: folderLabel(list), lists: [list] });
+      }
+    }
+    return [...groups.values()];
+  }, [facets?.folders, facets?.lists, panel?.providers]);
+
+  // A folder counts as browsable content even when empty, so a freshly
+  // created folder renders immediately instead of the empty state.
+  const hasTreeContent = listTree.some(
+    (section) => section.folders.length > 0 || section.orphanLists.length > 0,
+  );
+  const allTasksCount = listTree.reduce((total, section) => total + section.count, 0);
 
   const activeList =
     listSelection.kind === "list"
@@ -728,38 +941,41 @@ export function TasksPanel(props: {
     setView("tasks");
   }, []);
 
-  const toggleFolder = useCallback((folderId: string) => {
-    setExpandedFolders((current) => ({ ...current, [folderId]: !current[folderId] }));
+  const toggleNode = useCallback((nodeId: string) => {
+    setExpandedNodes((current) => ({ ...current, [nodeId]: !current[nodeId] }));
   }, []);
 
   const backToBrowse = useCallback(() => {
     setView("browse");
   }, []);
 
-  const openTaskDetail = useCallback((taskId: string) => {
-    setSelectedTaskId(taskId);
-    setView("detail");
-  }, []);
+  const openTaskDetail = useCallback(
+    (taskId: string) => {
+      if (view !== "detail") viewBeforeDetailRef.current = view;
+      setSelectedTaskId(taskId);
+      setView("detail");
+    },
+    [view],
+  );
 
   // The header indicator's dialog hands its task over to this panel.
   useTaskPanelViewRequest(props.environmentId, openTaskDetail);
 
   // Detail header breadcrumb: the task's own parent list, so a task opened
   // from a thread link can still jump back to its list regardless of the
-  // panel's current selection. Manual tasks have no list and fall back to
-  // "All tasks".
+  // panel's current selection. Tasks without a list fall back to "All tasks".
   const detailBreadcrumb = useMemo(() => {
     if (!detailTask) return null;
-    const externalListId = detailTask.externalListId;
-    if (externalListId === null) {
+    const listId = detailTask.listId;
+    if (listId === null) {
       return { key: "all", folderName: null, label: "All tasks", open: openAllTasks };
     }
-    const facetList = (facets?.lists ?? []).find((list) => list.id === externalListId) ?? null;
+    const facetList = (facets?.lists ?? []).find((list) => list.id === listId) ?? null;
     return {
-      key: externalListId,
+      key: listId,
       folderName: facetList?.folderName ?? null,
-      label: detailTask.externalListName ?? facetList?.name ?? "Task list",
-      open: () => openTaskList(externalListId),
+      label: detailTask.listName ?? facetList?.name ?? "Task list",
+      open: () => openTaskList(listId),
     };
   }, [detailTask, facets?.lists, openAllTasks, openTaskList]);
 
@@ -773,12 +989,74 @@ export function TasksPanel(props: {
     setPage(1);
   }, []);
 
-  const isSyncing = busyKey === "clickup-sync";
+  const createTask = useCallback(() => {
+    const title = newTaskTitle.trim();
+    if (!title) return;
+    void runMutation("task-create", async (connection) => {
+      // A manual task lands in the list currently browsed, whatever syncs it;
+      // from "All tasks" it stays unassigned.
+      await createManualTask(connection, {
+        title,
+        ...(listSelection.kind === "list" ? { listId: listSelection.listId } : {}),
+      });
+      setNewTaskTitle("");
+    });
+  }, [listSelection, newTaskTitle, runMutation]);
+
+  const submitCreateTask = useCallback(
+    (input: { title: string; description?: string; listId?: string }) =>
+      runMutation("task-create", async (connection) => {
+        await createManualTask(connection, input);
+      }),
+    [runMutation],
+  );
+
+  const submitCreateList = useCallback(
+    (input: { name: string; folderId?: string }) =>
+      runMutation("list-create", async (connection) => {
+        await createTaskList(connection, input);
+      }),
+    [runMutation],
+  );
+
+  const submitCreateFolder = useCallback(
+    (name: string) =>
+      runMutation("folder-create", async (connection) => {
+        await createTaskFolder(connection, name);
+      }),
+    [runMutation],
+  );
+
+  const confirmDeleteTreeItem = useCallback(() => {
+    const target = deleteTarget;
+    if (!target) return;
+    void runMutation(`tree-delete:${target.kind}:${target.id}`, async (connection) => {
+      if (target.kind === "folder") {
+        await deleteTaskFolder(connection, target.id);
+      } else {
+        await deleteTaskList(connection, target.id);
+      }
+    }).then((deleted) => {
+      setDeleteTarget(null);
+      if (!deleted) return;
+      // A selected list inside the deleted subtree would leave the tasks view
+      // pointing at nothing; fall back to "All tasks".
+      if (
+        listSelection.kind === "list" &&
+        deleteTargetListIdsRef.current.includes(listSelection.listId)
+      ) {
+        setListSelection({ kind: "all" });
+        setPage(1);
+      }
+    });
+  }, [deleteTarget, listSelection, runMutation]);
+
+  const isSyncing = busyKey === "provider-sync";
   const lastSyncRelative = lastSyncAt === null ? null : formatRelativeTimeLabel(lastSyncAt);
-  const lastSyncError = clickup?.lastSyncError ?? null;
+  const lastSyncError = syncStatusProvider?.lastSyncError ?? null;
   const headerActions = (
     <div className="flex shrink-0 items-center gap-2">
-      {tokenConfigured ? (
+      {connectedProviders.length > 0 ? (
         <>
           {isSyncing ? (
             <span className="text-xs text-muted-foreground">Syncing…</span>
@@ -809,7 +1087,7 @@ export function TasksPanel(props: {
         size="icon-sm"
         variant="ghost"
         onClick={() => void navigate({ to: "/settings/connections", hash: "clickup" })}
-        aria-label="ClickUp settings"
+        aria-label="Task provider settings"
       >
         <SettingsIcon />
       </Button>
@@ -844,6 +1122,154 @@ export function TasksPanel(props: {
         }
       }}
     />
+  );
+
+  const treeRowActions = (
+    provider: string,
+    target: TaskTreeDeleteTarget,
+    doomedListIds: ReadonlyArray<string>,
+  ) => {
+    // Synced lists/folders are the provider's to manage; only manual ones go.
+    if (provider !== "manual") return null;
+    return (
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label={`Delete ${target.kind}`}
+        title={`Delete ${target.kind}`}
+        onClick={() => {
+          deleteTargetListIdsRef.current = doomedListIds;
+          setDeleteTarget(target);
+        }}
+      >
+        <Trash2Icon className="size-3.5" />
+      </Button>
+    );
+  };
+
+  const renderListNode = (list: TaskListFacet) => (
+    <NavTreeRow
+      key={list.id}
+      icon={<ListIcon />}
+      label={list.name}
+      count={list.count}
+      active={listSelection.kind === "list" && listSelection.listId === list.id}
+      onClick={() => openTaskList(list.id)}
+      actions={treeRowActions(
+        list.provider,
+        {
+          kind: "list",
+          id: list.id,
+          name: list.name,
+          listCount: 0,
+          taskCount: list.count,
+        },
+        [list.id],
+      )}
+    />
+  );
+
+  const renderFolderNode = (folder: TaskTreeFolder) => {
+    const expanded = listSearchQuery.length > 0 || (expandedNodes[folder.id] ?? false);
+    // A folder can match the search by name while none of its lists do; keep
+    // the drill-down usable by falling back to all of its lists.
+    const matchingLists = folder.lists.filter(matchesList);
+    const folderLists =
+      listSearchQuery.length === 0 || matchingLists.length === 0 ? folder.lists : matchingLists;
+    return (
+      <div key={folder.id}>
+        <NavTreeRow
+          icon={expanded ? <FolderOpenIcon /> : <FolderIcon />}
+          label={folder.name}
+          count={folder.count}
+          trailing={
+            <ChevronRightIcon
+              className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-90")}
+            />
+          }
+          onClick={() => toggleNode(folder.id)}
+          actions={treeRowActions(
+            folder.provider,
+            {
+              kind: "folder",
+              id: folder.id,
+              name: folder.name,
+              listCount: folder.lists.length,
+              taskCount: folder.count,
+            },
+            folder.lists.map((list) => list.id),
+          )}
+        />
+        {expanded ? (
+          <div className="ml-3 space-y-0.5 border-l border-border/70 pl-2">
+            {folderLists.map(renderListNode)}
+            {folderLists.length === 0 ? (
+              <p className="px-2 py-1 text-xs text-muted-foreground">No lists in this folder.</p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderProviderSection = (section: TaskTreeSection) => {
+    const expanded = listSearchQuery.length > 0 || (expandedNodes[section.key] ?? false);
+    return (
+      <div key={section.key}>
+        <NavTreeRow
+          icon={expanded ? <FolderOpenIcon /> : <FolderIcon />}
+          label={section.label}
+          count={section.count}
+          trailing={
+            <ChevronRightIcon
+              className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-90")}
+            />
+          }
+          onClick={() => toggleNode(section.key)}
+        />
+        {expanded ? (
+          <div className="ml-3 space-y-0.5 border-l border-border/70 pl-2">
+            {section.folders.map(renderFolderNode)}
+            {section.orphanLists.map(renderListNode)}
+            {section.folders.length === 0 && section.orphanLists.length === 0 ? (
+              <p className="px-2 py-1 text-xs text-muted-foreground">No lists yet.</p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const createDialogs = (
+    <>
+      <CreateTaskDialog
+        open={createTaskOpen}
+        onOpenChange={setCreateTaskOpen}
+        groups={taskOptionGroups}
+        defaultListId={listSelection.kind === "list" ? listSelection.listId : null}
+        busy={busyKey === "task-create"}
+        onSubmit={submitCreateTask}
+      />
+      <CreateListDialog
+        open={createListOpen}
+        onOpenChange={setCreateListOpen}
+        folders={manualFolders}
+        busy={busyKey === "list-create"}
+        onSubmit={submitCreateList}
+      />
+      <CreateFolderDialog
+        open={createFolderOpen}
+        onOpenChange={setCreateFolderOpen}
+        busy={busyKey === "folder-create"}
+        onSubmit={submitCreateFolder}
+      />
+      <DeleteTreeItemDialog
+        target={deleteTarget}
+        busy={busyKey?.startsWith("tree-delete:") ?? false}
+        onConfirm={confirmDeleteTreeItem}
+        onClose={() => setDeleteTarget(null)}
+      />
+    </>
   );
 
   if (loading && panel === null) {
@@ -882,7 +1308,7 @@ export function TasksPanel(props: {
                   >
                     {detailBreadcrumb.folderName ? (
                       <FolderOpenIcon className="size-3.5 shrink-0" />
-                    ) : detailTask?.externalListId ? (
+                    ) : detailTask?.listId ? (
                       <ListIcon className="size-3.5 shrink-0" />
                     ) : (
                       <SquareCheckBigIcon className="size-3.5 shrink-0" />
@@ -1011,6 +1437,43 @@ export function TasksPanel(props: {
 
           {tasksError ? <p className="text-xs text-destructive">{tasksError}</p> : null}
 
+          <section className="flex items-center gap-2">
+            <Input
+              value={newTaskTitle}
+              onChange={(event) => setNewTaskTitle(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") createTask();
+              }}
+              placeholder={
+                listSelection.kind === "list"
+                  ? `Add a task to ${activeList?.name ?? "this list"}…`
+                  : "Add a task…"
+              }
+              aria-label="New task title"
+            />
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={() => setCreateTaskOpen(true)}
+              aria-label="New task with details"
+              title="New task with details"
+            >
+              <ListPlusIcon />
+            </Button>
+            <Button
+              size="sm"
+              onClick={createTask}
+              disabled={busyKey === "task-create" || newTaskTitle.trim().length === 0}
+            >
+              {busyKey === "task-create" ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <PlusIcon className="size-3.5" />
+              )}
+              Add
+            </Button>
+          </section>
+
           {!tasksLoading && totalTasks === 0 ? (
             <div className="rounded-xl border border-dashed border-border/80 bg-card/60 p-6 text-center text-sm text-muted-foreground">
               {anyTasks ? "No tasks match the current filters." : "No tasks in this view yet."}
@@ -1021,7 +1484,7 @@ export function TasksPanel(props: {
             <TaskGroup title="Manual" tasks={taskGroups.manual} renderTask={renderTaskCard} />
           ) : null}
 
-          {taskGroups.clickupGroups.map(([listName, tasks]) => (
+          {taskGroups.providerGroups.map(([listName, tasks]) => (
             <TaskGroup key={listName} title={listName} tasks={tasks} renderTask={renderTaskCard} />
           ))}
 
@@ -1049,6 +1512,7 @@ export function TasksPanel(props: {
               </Button>
             </div>
           ) : null}
+          {createDialogs}
         </div>
       </ScrollArea>
     );
@@ -1071,11 +1535,36 @@ export function TasksPanel(props: {
             placeholder="Search folders and lists…"
             aria-label="Search folders and lists"
           />
-          {browsableListCount === 0 ? (
-            <p className="px-2 py-1 text-xs text-muted-foreground">
-              No ClickUp folders or lists yet. Sync to import them.
-            </p>
-          ) : (
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setCreateFolderOpen(true)}
+              disabled={busyKey === "folder-create"}
+            >
+              <FolderPlusIcon className="size-3.5" />
+              Folder
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setCreateListOpen(true)}
+              disabled={busyKey === "list-create"}
+            >
+              <ListPlusIcon className="size-3.5" />
+              List
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setCreateTaskOpen(true)}
+              disabled={busyKey === "task-create"}
+            >
+              <SquareCheckBigIcon className="size-3.5" />
+              Task
+            </Button>
+          </div>
+          {hasTreeContent ? (
             <div className="space-y-0.5">
               <NavTreeRow
                 icon={<SquareCheckBigIcon />}
@@ -1084,69 +1573,21 @@ export function TasksPanel(props: {
                 active={listSelection.kind === "all"}
                 onClick={openAllTasks}
               />
-              {visibleFolders.map((folder) => {
-                const expanded =
-                  listSearchQuery.length > 0 || (expandedFolders[folder.id] ?? false);
-                const matchingLists = folder.lists.filter(matchesList);
-                // A folder can match the search by name while none of its
-                // lists do; keep the drill-down usable by falling back to all
-                // of its lists.
-                const folderLists =
-                  listSearchQuery.length === 0 || matchingLists.length === 0
-                    ? folder.lists
-                    : matchingLists;
-                return (
-                  <div key={folder.id}>
-                    <NavTreeRow
-                      icon={expanded ? <FolderOpenIcon /> : <FolderIcon />}
-                      label={folder.name}
-                      count={folder.count}
-                      trailing={
-                        <ChevronRightIcon
-                          className={cn(
-                            "size-3.5 shrink-0 transition-transform",
-                            expanded && "rotate-90",
-                          )}
-                        />
-                      }
-                      onClick={() => toggleFolder(folder.id)}
-                    />
-                    {expanded ? (
-                      <div className="ml-3 space-y-0.5 border-l border-border/70 pl-2">
-                        {folderLists.map((list) => (
-                          <NavTreeRow
-                            key={list.id}
-                            icon={<ListIcon />}
-                            label={list.name}
-                            count={list.count}
-                            active={
-                              listSelection.kind === "list" && listSelection.listId === list.id
-                            }
-                            onClick={() => openTaskList(list.id)}
-                          />
-                        ))}
-                        {folderLists.length === 0 ? (
-                          <p className="px-2 py-1 text-xs text-muted-foreground">
-                            No lists in this folder.
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-              {visibleOrphans.map((list) => (
-                <NavTreeRow
-                  key={list.id}
-                  icon={<ListIcon />}
-                  label={list.name}
-                  count={list.count}
-                  active={listSelection.kind === "list" && listSelection.listId === list.id}
-                  onClick={() => openTaskList(list.id)}
-                />
-              ))}
+              {manualSection ? (
+                <>
+                  {manualSection.folders.map(renderFolderNode)}
+                  {manualSection.orphanLists.map(renderListNode)}
+                </>
+              ) : null}
+              {providerSections.map(renderProviderSection)}
             </div>
+          ) : (
+            <p className="px-2 py-1 text-xs text-muted-foreground">
+              No folders or lists yet. Sync a provider, or create a folder, list, or task to get
+              started.
+            </p>
           )}
+          {createDialogs}
         </section>
       </div>
     </ScrollArea>

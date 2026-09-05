@@ -1,4 +1,4 @@
-import type { Task, TaskClickUpComment, TaskNote } from "@t3tools/contracts";
+import type { Task, TaskComment, TaskNote } from "@t3tools/contracts";
 
 /**
  * Shared shape of the `<task_context>` block, rendered identically whether
@@ -26,12 +26,12 @@ export function taskStatusLabel(task: Task): string {
 }
 
 interface CommentThread {
-  readonly comment: TaskClickUpComment;
-  readonly replies: Array<TaskClickUpComment>;
+  readonly comment: TaskComment;
+  readonly replies: Array<TaskComment>;
 }
 
-/** Groups the flat ClickUp list into threads; orphaned replies render top-level. */
-function groupCommentThreads(comments: ReadonlyArray<TaskClickUpComment>): Array<CommentThread> {
+/** Groups the flat comment list into threads; orphaned replies render top-level. */
+function groupCommentThreads(comments: ReadonlyArray<TaskComment>): Array<CommentThread> {
   const threadsById = new Map<string, CommentThread>();
   const threads: Array<CommentThread> = [];
   for (const comment of comments) {
@@ -66,9 +66,9 @@ function pushBody(lines: Array<string>, body: string, firstLine: string, indent:
   }
 }
 
-function formatCommentLines(comments: ReadonlyArray<TaskClickUpComment>): Array<string> {
+function formatCommentLines(comments: ReadonlyArray<TaskComment>, heading: string): Array<string> {
   if (comments.length === 0) return [];
-  const lines: Array<string> = ["### ClickUp comments"];
+  const lines: Array<string> = [`### ${heading} comments`];
   for (const thread of groupCommentThreads(comments)) {
     pushBody(
       lines,
@@ -102,13 +102,13 @@ function formatNoteLines(notes: ReadonlyArray<TaskNote>): Array<string> {
 }
 
 export interface TaskContextExtras {
-  /** Threaded ClickUp comments, oldest first, as served by the tasks API. */
-  readonly clickUpComments?: ReadonlyArray<TaskClickUpComment>;
+  /** Threaded provider comments, oldest first, as served by the tasks API. */
+  readonly comments?: ReadonlyArray<TaskComment>;
 }
 
 /**
  * Markdown body describing the task for the model. Notes always render (they
- * ride the task payload); ClickUp comments render when the caller has them.
+ * ride the task payload); provider comments render when the caller has them.
  * Long histories cap to the most recent entries so a chatty task cannot
  * drown the turn.
  */
@@ -116,15 +116,15 @@ export function formatTaskContext(task: Task, extras?: TaskContextExtras): strin
   const lines: Array<string> = [`## Task: ${task.title}`, ""];
 
   const meta: Array<string> = [`Status: ${taskStatusLabel(task)}`];
-  if (task.externalListName) meta.push(`List: ${task.externalListName}`);
+  if (task.listName) meta.push(`List: ${task.listName}`);
   if (task.assignees.length > 0) meta.push(`Assignees: ${task.assignees.join(", ")}`);
   lines.push(...meta, "");
 
   if (task.description) lines.push(task.description.trim(), "");
   if (task.externalUrl) lines.push(`Source: ${task.externalUrl}`, "");
 
-  const visibleComments = (extras?.clickUpComments ?? []).slice(-TASK_CONTEXT_MAX_ENTRIES);
-  lines.push(...formatCommentLines(visibleComments));
+  const visibleComments = (extras?.comments ?? []).slice(-TASK_CONTEXT_MAX_ENTRIES);
+  lines.push(...formatCommentLines(visibleComments, "Provider"));
   lines.push(...formatNoteLines(task.notes.slice(-TASK_CONTEXT_MAX_ENTRIES)));
 
   return lines.join("\n").trim();

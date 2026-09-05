@@ -8,9 +8,11 @@ import { ManagedRelay } from "@t3tools/client-runtime/relay";
 import type {
   Task,
   TaskAttachmentsResult,
-  TaskClickUpCommentsResult,
+  TaskCommentsResult,
+  TaskFolder,
   TaskId,
   TaskLinksResult,
+  TaskList,
   TaskPanel,
   TaskQueryFilter,
   TaskQueryResult,
@@ -132,9 +134,9 @@ export async function fetchThreadTask(
   return result.tasks[0] ?? null;
 }
 
-// Both detail fetches relay to ClickUp, whose latency spikes past the default
-// request timeout; give them a wider window.
-const CLICKUP_DETAIL_TIMEOUT_MS = 20_000;
+// Both detail fetches relay to the provider, whose latency spikes past the
+// default request timeout; give them a wider window.
+const PROVIDER_DETAIL_TIMEOUT_MS = 20_000;
 
 export async function fetchTaskAttachments(
   prepared: PreparedConnection,
@@ -153,14 +155,14 @@ export async function fetchTaskAttachments(
         params: { taskId },
         headers,
       }),
-    CLICKUP_DETAIL_TIMEOUT_MS,
+    PROVIDER_DETAIL_TIMEOUT_MS,
   );
 }
 
 export async function fetchTaskComments(
   prepared: PreparedConnection,
   taskId: TaskId,
-): Promise<TaskClickUpCommentsResult> {
+): Promise<TaskCommentsResult> {
   const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, `/api/tasks/comments/${taskId}`);
   return runTasksRequest(
     prepared,
@@ -171,7 +173,7 @@ export async function fetchTaskComments(
         params: { taskId },
         headers,
       }),
-    CLICKUP_DETAIL_TIMEOUT_MS,
+    PROVIDER_DETAIL_TIMEOUT_MS,
   );
 }
 
@@ -213,10 +215,79 @@ export async function deleteTask(prepared: PreparedConnection, taskId: TaskId): 
   );
 }
 
-export async function syncClickUpTasks(prepared: PreparedConnection): Promise<void> {
-  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/clickup/sync");
+export async function deleteTaskList(prepared: PreparedConnection, listId: string): Promise<void> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/lists/delete");
   await runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
-    client.tasks.syncClickUpTasks({
+    client.tasks.deleteList({
+      headers,
+      payload: { listId },
+    }),
+  );
+}
+
+export async function deleteTaskFolder(
+  prepared: PreparedConnection,
+  folderId: string,
+): Promise<void> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/folders/delete");
+  await runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.deleteFolder({
+      headers,
+      payload: { folderId },
+    }),
+  );
+}
+
+export async function createManualTask(
+  prepared: PreparedConnection,
+  input: { title: string; description?: string; listId?: string },
+): Promise<Task> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/manual");
+  return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.createManual({
+      headers,
+      payload: input,
+    }),
+  );
+}
+
+export async function createTaskList(
+  prepared: PreparedConnection,
+  input: { name: string; folderId?: string },
+): Promise<TaskList> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/lists");
+  return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.createList({
+      headers,
+      payload: input,
+    }),
+  );
+}
+
+export async function createTaskFolder(
+  prepared: PreparedConnection,
+  name: string,
+): Promise<TaskFolder> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/folders");
+  return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.createFolder({
+      headers,
+      payload: { name },
+    }),
+  );
+}
+
+export async function syncProviderTasks(
+  prepared: PreparedConnection,
+  providerId: string,
+): Promise<TaskPanel> {
+  const requestUrl = environmentEndpointUrl(
+    prepared.httpBaseUrl,
+    `/api/tasks/providers/${providerId}/sync`,
+  );
+  return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.syncProvider({
+      params: { providerId },
       headers,
     }),
   );

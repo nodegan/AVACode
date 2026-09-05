@@ -61,6 +61,26 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "createList",
+        Effect.fn("environment.tasks.createList")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* tasks
+            .createList(args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_upsert_failed", cause)));
+        }),
+      )
+      .handle(
+        "createFolder",
+        Effect.fn("environment.tasks.createFolder")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* tasks
+            .createFolder(args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_upsert_failed", cause)));
+        }),
+      )
+      .handle(
         "updateTask",
         Effect.fn("environment.tasks.updateTask")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
@@ -81,6 +101,26 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "deleteList",
+        Effect.fn("environment.tasks.deleteList")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* tasks
+            .deleteList(args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_upsert_failed", cause)));
+        }),
+      )
+      .handle(
+        "deleteFolder",
+        Effect.fn("environment.tasks.deleteFolder")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* tasks
+            .deleteFolder(args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_upsert_failed", cause)));
+        }),
+      )
+      .handle(
         "addNote",
         Effect.fn("environment.tasks.addNote")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
@@ -97,7 +137,7 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* tasks
             .getTaskAttachments(args.params.taskId)
-            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_provider_failed", cause)));
         }),
       )
       .handle(
@@ -107,47 +147,50 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* tasks
             .getTaskComments(args.params.taskId)
-            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_provider_failed", cause)));
         }),
       )
       .handle(
-        "setClickUpToken",
-        Effect.fn("environment.tasks.setClickUpToken")(function* (args) {
+        "setProviderCredential",
+        Effect.fn("environment.tasks.setProviderCredential")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
           return yield* tasks
-            .setClickUpToken(args.payload.token)
-            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
+            .setProviderCredential({
+              providerId: args.params.providerId,
+              token: args.payload.token,
+            })
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_provider_failed", cause)));
         }),
       )
       .handle(
-        "clearClickUpToken",
-        Effect.fn("environment.tasks.clearClickUpToken")(function* (args) {
+        "clearProviderCredential",
+        Effect.fn("environment.tasks.clearProviderCredential")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
           return yield* tasks
-            .clearClickUpToken()
-            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
+            .clearProviderCredential({ providerId: args.params.providerId })
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_provider_failed", cause)));
         }),
       )
       .handle(
-        "clickUpStatus",
-        Effect.fn("environment.tasks.clickUpStatus")(function* (args) {
+        "providerStatus",
+        Effect.fn("environment.tasks.providerStatus")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* tasks
-            .getClickUpStatus()
-            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
+            .getProviderStatus({ providerId: args.params.providerId })
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_provider_failed", cause)));
         }),
       )
       .handle(
-        "syncClickUpTasks",
-        Effect.fn("environment.tasks.syncClickUpTasks")(function* (args) {
+        "syncProvider",
+        Effect.fn("environment.tasks.syncProvider")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
           return yield* tasks
-            .syncClickUpTasks()
-            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_clickup_failed", cause)));
+            .syncProviderTasks({ providerId: args.params.providerId })
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_provider_failed", cause)));
         }),
       );
   }),

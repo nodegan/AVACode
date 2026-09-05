@@ -2,7 +2,7 @@ import type {
   EnvironmentId,
   Task,
   TaskAttachment,
-  TaskClickUpComment,
+  TaskComment,
   TaskStatusCategory,
   ThreadId,
 } from "@t3tools/contracts";
@@ -173,19 +173,19 @@ type AttachmentsState =
   | { readonly status: "ready"; readonly attachments: ReadonlyArray<TaskAttachment> };
 
 /**
- * Files added to the task in ClickUp, fetched on demand when the detail view
+ * Files added to the task at the provider, fetched on demand when the detail view
  * opens (sync skips them to avoid a request per task). Manual tasks render
  * nothing.
  */
 function TaskAttachmentsSection(props: TaskDetailsBodyProps) {
   const { task } = props;
   const prepared = usePreparedConnection(props.environmentId ?? null);
-  const isClickUpTask = task.source === "clickup" && task.externalTaskId !== null;
+  const isProviderTask = task.provider !== "manual" && task.externalTaskId !== null;
   const [state, setState] = useState<AttachmentsState>({ status: "loading" });
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
 
   useEffect(() => {
-    if (!isClickUpTask || prepared._tag === "None") return;
+    if (!isProviderTask || prepared._tag === "None") return;
     let cancelled = false;
     setState({ status: "loading" });
     fetchTaskAttachments(prepared.value, task.id)
@@ -198,9 +198,9 @@ function TaskAttachmentsSection(props: TaskDetailsBodyProps) {
     return () => {
       cancelled = true;
     };
-  }, [isClickUpTask, prepared, task.id]);
+  }, [isProviderTask, prepared, task.id]);
 
-  if (!isClickUpTask || prepared._tag === "None") return null;
+  if (!isProviderTask || prepared._tag === "None") return null;
 
   const imageAttachments: TaskAttachment[] = [];
   const fileAttachments: TaskAttachment[] = [];
@@ -300,9 +300,9 @@ export interface TaskDetailsBodyProps {
   environmentId?: EnvironmentId | undefined;
 }
 
-interface ClickUpCommentThread {
-  readonly comment: TaskClickUpComment;
-  readonly replies: Array<TaskClickUpComment>;
+interface ProviderCommentThread {
+  readonly comment: TaskComment;
+  readonly replies: Array<TaskComment>;
 }
 
 /**
@@ -322,11 +322,11 @@ function TaskMarkdownBubble({ body }: { body: string }) {
  * replies. ClickUp replies name their parent comment id; a reply whose parent
  * was dropped (e.g. an empty comment) still renders, as a top-level comment.
  */
-function groupClickUpCommentThreads(
-  comments: ReadonlyArray<TaskClickUpComment>,
-): Array<ClickUpCommentThread> {
-  const threadsById = new Map<string, ClickUpCommentThread>();
-  const threads: Array<ClickUpCommentThread> = [];
+function groupProviderCommentThreads(
+  comments: ReadonlyArray<TaskComment>,
+): Array<ProviderCommentThread> {
+  const threadsById = new Map<string, ProviderCommentThread>();
+  const threads: Array<ProviderCommentThread> = [];
   for (const comment of comments) {
     const parent = comment.parentId === null ? undefined : threadsById.get(comment.parentId);
     if (parent) {
@@ -341,7 +341,7 @@ function groupClickUpCommentThreads(
 }
 
 /** Round author avatar like ClickUp's; falls back to a colored initial. */
-function ClickUpCommentAvatar(props: {
+function ProviderCommentAvatar(props: {
   name: string;
   avatarUrl: string | null;
   color: string | null;
@@ -367,10 +367,10 @@ function ClickUpCommentAvatar(props: {
   );
 }
 
-function ClickUpCommentRow({ comment }: { comment: TaskClickUpComment }) {
+function ProviderCommentRow({ comment }: { comment: TaskComment }) {
   return (
     <div className="flex min-w-0 gap-2">
-      <ClickUpCommentAvatar
+      <ProviderCommentAvatar
         name={comment.authorName}
         avatarUrl={comment.authorAvatarUrl}
         color={comment.authorColor}
@@ -399,13 +399,13 @@ function ClickUpCommentRow({ comment }: { comment: TaskClickUpComment }) {
   );
 }
 
-function ClickUpCommentThreadRow({ thread }: { thread: ClickUpCommentThread }) {
+function ProviderCommentThreadRow({ thread }: { thread: ProviderCommentThread }) {
   // Threads stay collapsed until asked for, like ClickUp's "N replies" toggle.
   const [expanded, setExpanded] = useState(false);
   const replyLabel = thread.replies.length === 1 ? "1 reply" : `${thread.replies.length} replies`;
   return (
     <div className="space-y-2">
-      <ClickUpCommentRow comment={thread.comment} />
+      <ProviderCommentRow comment={thread.comment} />
       {thread.replies.length > 0 ? (
         <>
           <Button
@@ -425,7 +425,7 @@ function ClickUpCommentThreadRow({ thread }: { thread: ClickUpCommentThread }) {
             // Replies nest under their parent behind a thread rail, like ClickUp.
             <div className="ml-4 space-y-2 border-l border-border/70 pl-3">
               {thread.replies.map((reply) => (
-                <ClickUpCommentRow key={reply.id} comment={reply} />
+                <ProviderCommentRow key={reply.id} comment={reply} />
               ))}
             </div>
           ) : null}
@@ -435,24 +435,24 @@ function ClickUpCommentThreadRow({ thread }: { thread: ClickUpCommentThread }) {
   );
 }
 
-type ClickUpCommentsState =
+type ProviderCommentsState =
   | { readonly status: "loading" }
   | { readonly status: "error" }
-  | { readonly status: "ready"; readonly comments: ReadonlyArray<TaskClickUpComment> };
+  | { readonly status: "ready"; readonly comments: ReadonlyArray<TaskComment> };
 
 /**
  * Comments left on the task in ClickUp, fetched on demand when the detail view
  * opens (read-only for now; local comments live in the composer below).
  * Manual tasks render nothing.
  */
-function TaskClickUpCommentsSection(props: TaskDetailsBodyProps) {
+function TaskCommentsSection(props: TaskDetailsBodyProps) {
   const { task } = props;
   const prepared = usePreparedConnection(props.environmentId ?? null);
-  const isClickUpTask = task.source === "clickup" && task.externalTaskId !== null;
-  const [state, setState] = useState<ClickUpCommentsState>({ status: "loading" });
+  const isProviderTask = task.provider !== "manual" && task.externalTaskId !== null;
+  const [state, setState] = useState<ProviderCommentsState>({ status: "loading" });
 
   useEffect(() => {
-    if (!isClickUpTask || prepared._tag === "None") return;
+    if (!isProviderTask || prepared._tag === "None") return;
     let cancelled = false;
     setState({ status: "loading" });
     fetchTaskComments(prepared.value, task.id)
@@ -465,30 +465,30 @@ function TaskClickUpCommentsSection(props: TaskDetailsBodyProps) {
     return () => {
       cancelled = true;
     };
-  }, [isClickUpTask, prepared, task.id]);
+  }, [isProviderTask, prepared, task.id]);
 
   const threads = useMemo(
-    () => (state.status === "ready" ? groupClickUpCommentThreads(state.comments) : []),
+    () => (state.status === "ready" ? groupProviderCommentThreads(state.comments) : []),
     [state],
   );
 
-  if (!isClickUpTask || prepared._tag === "None") return null;
+  if (!isProviderTask || prepared._tag === "None") return null;
 
   return (
     <div className="space-y-2">
       <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-        ClickUp comments
+        Provider comments
       </h5>
       {state.status === "loading" ? (
         <p className="text-xs text-muted-foreground">Loading…</p>
       ) : state.status === "error" ? (
-        <p className="text-xs text-destructive">Failed to load ClickUp comments.</p>
+        <p className="text-xs text-destructive">Failed to load Provider comments.</p>
       ) : threads.length === 0 ? (
         <p className="text-xs text-muted-foreground">No comments on ClickUp.</p>
       ) : (
         <div className="space-y-3">
           {threads.map((thread) => (
-            <ClickUpCommentThreadRow key={thread.comment.id} thread={thread} />
+            <ProviderCommentThreadRow key={thread.comment.id} thread={thread} />
           ))}
         </div>
       )}
@@ -542,7 +542,13 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
         <TaskDetailField
           icon={<CloudIcon />}
           label="Source"
-          value={task.source === "manual" ? "Manual" : "ClickUp"}
+          value={
+            task.provider === "manual"
+              ? "Manual"
+              : task.externalUrl
+                ? new URL(task.externalUrl).hostname
+                : "Provider"
+          }
         />
         <TaskDetailField
           icon={<CalendarIcon />}
@@ -556,8 +562,8 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
           value={formatTaskDate(task.updatedAt)}
           title={new Date(task.updatedAt).toLocaleString()}
         />
-        {task.externalListName ? (
-          <TaskDetailField icon={<ListIcon />} label="List" value={task.externalListName} />
+        {task.listName ? (
+          <TaskDetailField icon={<ListIcon />} label="List" value={task.listName} />
         ) : null}
         {task.assignees.length > 0 ? (
           <TaskDetailField
@@ -600,7 +606,7 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
         ) : null}
       </div>
       <TaskAttachmentsSection task={task} environmentId={props.environmentId} />
-      <TaskClickUpCommentsSection task={task} environmentId={props.environmentId} />
+      <TaskCommentsSection task={task} environmentId={props.environmentId} />
       <div className="space-y-2">
         <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           Notes
@@ -735,7 +741,7 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
   const showLinkCurrent = onLink !== undefined && !isLinkedToCurrentThread;
   const showBranch = environmentId !== undefined && props.activeThreadId !== null;
   const showUnlink = linkedThreadId !== null && props.onUnlink !== undefined;
-  const showDelete = props.onDelete !== undefined && task.source === "manual";
+  const showDelete = props.onDelete !== undefined && task.provider === "manual";
   const showOpenExternal = task.externalUrl !== null;
   const showOverflow = showUnlink || showDelete || showOpenExternal;
 

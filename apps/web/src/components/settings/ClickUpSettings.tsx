@@ -1,4 +1,4 @@
-import type { ClickUpConnectionStatus } from "@t3tools/contracts";
+import type { TaskProviderConnectionStatus } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { useCallback, useEffect, useState } from "react";
 
@@ -14,11 +14,17 @@ import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import { SettingsSection, useRelativeTimeTick } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
+/**
+ * ClickUp is the first task provider; the connection rides the generic
+ * provider endpoints, so additional providers slot into this shape.
+ */
+const CLICKUP_PROVIDER_ID = "clickup";
+
 type BusyAction = "connect" | "disconnect" | null;
 
-const DISCONNECTED_STATUS: ClickUpConnectionStatus = {
-  tokenConfigured: false,
-  workspaceName: null,
+const DISCONNECTED_STATUS: TaskProviderConnectionStatus = {
+  credentialConfigured: false,
+  accountLabel: null,
   lastSyncAt: null,
   lastSyncError: null,
 };
@@ -30,12 +36,14 @@ const absoluteTimeFormatter = new Intl.DateTimeFormat(undefined, {
 
 function clickUpStatusEffect() {
   return PrimaryEnvironmentHttpClient.pipe(
-    Effect.flatMap((client) => client.tasks.clickUpStatus({ headers: {} })),
+    Effect.flatMap((client) =>
+      client.tasks.providerStatus({ headers: {}, params: { providerId: CLICKUP_PROVIDER_ID } }),
+    ),
   );
 }
 
 export function ClickUpSettings() {
-  const [status, setStatus] = useState<ClickUpConnectionStatus | null>(null);
+  const [status, setStatus] = useState<TaskProviderConnectionStatus | null>(null);
   const [tokenDraft, setTokenDraft] = useState("");
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
 
@@ -61,13 +69,17 @@ export function ClickUpSettings() {
     runPrimaryHttp(
       PrimaryEnvironmentHttpClient.pipe(
         Effect.flatMap((client) =>
-          client.tasks.setClickUpToken({ headers: {}, payload: { token } }),
+          client.tasks.setProviderCredential({
+            headers: {},
+            params: { providerId: CLICKUP_PROVIDER_ID },
+            payload: { token },
+          }),
         ),
       ),
     )
       .then(() => {
         setTokenDraft("");
-        setStatus((current) => (current ? { ...current, tokenConfigured: true } : current));
+        setStatus((current) => (current ? { ...current, credentialConfigured: true } : current));
         // Pick up the account name without flashing the loading state.
         refreshStatus(true);
         toastManager.add({
@@ -92,12 +104,17 @@ export function ClickUpSettings() {
     setBusyAction("disconnect");
     runPrimaryHttp(
       PrimaryEnvironmentHttpClient.pipe(
-        Effect.flatMap((client) => client.tasks.clearClickUpToken({ headers: {} })),
+        Effect.flatMap((client) =>
+          client.tasks.clearProviderCredential({
+            headers: {},
+            params: { providerId: CLICKUP_PROVIDER_ID },
+          }),
+        ),
       ),
     )
       .then(() => {
         setStatus((current) =>
-          current ? { ...current, tokenConfigured: false, lastSyncError: null } : current,
+          current ? { ...current, credentialConfigured: false, lastSyncError: null } : current,
         );
         toastManager.add({ type: "success", title: "ClickUp disconnected" });
       })
@@ -114,8 +131,8 @@ export function ClickUpSettings() {
   }, []);
 
   const isLoading = status === null;
-  const isConnected = status?.tokenConfigured ?? false;
-  const workspaceName = status?.workspaceName?.trim() || null;
+  const isConnected = status?.credentialConfigured ?? false;
+  const workspaceName = status?.accountLabel?.trim() || null;
   const lastSyncAt = status?.lastSyncAt ?? null;
   const lastSyncError = status?.lastSyncError ?? null;
 

@@ -53,7 +53,7 @@ export function ThreadTaskIndicator(props: {
 
   const closeDetails = useCallback(() => {
     setTask(null);
-    setCommentDraft("");
+    setNoteDraft("");
     setBusyKey(null);
   }, []);
 
@@ -120,7 +120,7 @@ export function ThreadTaskIndicator(props: {
             );
           }}
           onDelete={
-            task.source === "manual"
+            task.provider === "manual"
               ? () => {
                   void runMutation(`task-delete:${task.id}`, (connection) =>
                     deleteTask(connection, task.id),

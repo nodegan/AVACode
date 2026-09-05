@@ -1,15 +1,17 @@
 import {
   AddTaskNoteInput,
-  type ClickUpConnectionStatus,
   CreateManualTaskInput,
-  type ClickUpWorkspaceSummary,
+  CreateTaskFolderInput,
+  CreateTaskListInput,
+  DeleteTaskFolderInput,
   DeleteTaskInput,
+  DeleteTaskListInput,
+  MANUAL_TASK_PROVIDER,
   type Task,
-  TaskAttachment,
   type TaskAttachmentsResult,
-  TaskClickUpComment as TaskClickUpCommentSchema,
-  type TaskClickUpComment,
-  type TaskClickUpCommentsResult,
+  type TaskCommentsResult,
+  TaskFolder,
+  TaskList,
   type TaskNote,
   TaskNote as TaskNoteSchema,
   TaskFacets,
@@ -19,8 +21,10 @@ import {
   type TaskQueryResult,
   Task as TaskSchema,
   type TaskPanel,
+  type TaskProviderConnectionStatus,
+  type TaskProviderId,
+  type TaskProviderState,
   type TaskStatusCategory,
-  type TaskSyncConfig,
   QueryTasksInput,
   ThreadId,
   UpdateTaskInput,
@@ -34,12 +38,15 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { Fragment } from "effect/unstable/sql/Statement";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { type SecretStoreError, ServerSecretStore } from "../auth/ServerSecretStore.ts";
+import {
+  type TaskProviderAdapter,
+  TaskProviderError,
+  TaskProviderRegistry,
+  TaskProviderRegistryLive,
+} from "./providers/types.ts";
 
-const CLICKUP_TOKEN_SECRET = "clickup-api-token";
-const CLICKUP_SYNC_PROVIDER = "clickup";
 const TASK_PAGE_SIZE_DEFAULT = 10;
 const TASK_PAGE_SIZE_MAX = 200;
 const textEncoder = new TextEncoder();
@@ -47,26 +54,27 @@ const textDecoder = new TextDecoder();
 
 interface TaskRow {
   readonly id: string;
-  readonly source: Task["source"];
+  readonly provider: TaskProviderId;
   readonly title: string;
   readonly description: string;
   readonly statusLabel: string;
   readonly statusCategory: TaskStatusCategory;
   readonly statusColor: string | null;
   readonly linkedThreadId: string | null;
+  readonly listId: string | null;
+  readonly listName: string | null;
   readonly externalTaskId: string | null;
   readonly externalCustomId: string | null;
   readonly externalUrl: string | null;
-  readonly externalListId: string | null;
-  readonly externalListName: string | null;
-  readonly externalFolderId: string | null;
-  readonly externalFolderName: string | null;
   readonly assigneesJson: string;
   readonly syncedAt: string | null;
   readonly externalUpdatedAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+/** Write-shaped task row; listName is derived by join on read, never stored. */
+type TaskUpsertRow = Omit<TaskRow, "listName">;
 
 interface TaskNoteRow {
   readonly id: string;
@@ -76,10 +84,24 @@ interface TaskNoteRow {
   readonly updatedAt: string;
 }
 
-interface TaskSyncConfigRow {
-  readonly workspaceId: string;
-  readonly workspaceName: string | null;
-  readonly listIdsJson: string;
+interface TaskFolderRow {
+  readonly id: string;
+  readonly provider: TaskProviderId;
+  readonly externalFolderId: string | null;
+  readonly name: string;
+}
+
+interface TaskListRow {
+  readonly id: string;
+  readonly provider: TaskProviderId;
+  readonly externalListId: string | null;
+  readonly folderId: string | null;
+  readonly name: string;
+}
+
+interface ProviderConfigRow {
+  readonly provider: TaskProviderId;
+  readonly configJson: string;
   readonly lastSyncAt: string | null;
   readonly lastSyncError: string | null;
 }
@@ -93,87 +115,6 @@ interface NormalizedTaskQueryFilter {
   readonly linkedThreadId: string | null;
   readonly page: number;
   readonly pageSize: number;
-}
-
-interface ClickUpWorkspaceResponse {
-  readonly teams?: ReadonlyArray<{
-    readonly id?: string | number;
-    readonly name?: string;
-  }>;
-}
-
-interface ClickUpAssigneeResponse {
-  readonly id?: string | number | null;
-  readonly username?: string | null;
-}
-
-interface ClickUpTaskResponse {
-  readonly id?: string | number;
-  readonly custom_id?: string | null;
-  readonly name?: string;
-  readonly description?: string | null;
-  readonly markdown_description?: string | null;
-  readonly url?: string | null;
-  readonly date_created?: string | number | null;
-  readonly date_updated?: string | number | null;
-  readonly status?: {
-    readonly status?: string;
-    readonly type?: string;
-    readonly color?: string | null;
-  } | null;
-  readonly assignees?: ReadonlyArray<ClickUpAssigneeResponse | null>;
-  readonly list?: {
-    readonly id?: string | number | null;
-    readonly name?: string | null;
-  } | null;
-  readonly folder?: {
-    readonly id?: string | number | null;
-    readonly name?: string | null;
-    readonly hidden?: boolean | null;
-  } | null;
-  // Get Task returns attachments when present; the task list endpoint omits
-  // them, which is why the detail view fetches them per task.
-  readonly attachments?: ReadonlyArray<ClickUpAttachmentResponse>;
-}
-
-interface ClickUpTaskListResponse {
-  readonly tasks?: ReadonlyArray<ClickUpTaskResponse>;
-  readonly last_page?: boolean;
-}
-
-interface ClickUpAttachmentResponse {
-  readonly id?: string | number | null;
-  readonly title?: string | null;
-  readonly extension?: string | null;
-  readonly size?: number | string | null;
-  readonly url?: string | null;
-  readonly thumbnail_small?: string | null;
-  readonly thumbnail_large?: string | null;
-  readonly date?: string | number | null;
-}
-
-interface ClickUpCommentUserResponse {
-  readonly id?: string | number | null;
-  readonly username?: string | null;
-  readonly color?: string | null;
-  readonly profilePicture?: string | null;
-}
-
-interface ClickUpCommentResponse {
-  readonly id?: string | number | null;
-  readonly parent?: string | number | null;
-  readonly reply_count?: string | number | null;
-  readonly text_content?: string | null;
-  readonly comment_text?: string | null;
-  readonly resolved?: boolean | null;
-  readonly date?: string | number | null;
-  readonly user?: ClickUpCommentUserResponse | null;
-}
-
-interface ClickUpCommentsResponse {
-  readonly comments?: ReadonlyArray<ClickUpCommentResponse>;
-  readonly has_more?: boolean;
-  readonly last_page?: boolean;
 }
 
 export class TaskServiceError extends Schema.TaggedErrorClass<TaskServiceError>()(
@@ -223,189 +164,13 @@ function stringifyJsonArray(value: ReadonlyArray<string>): string {
   return JSON.stringify(value);
 }
 
-export function taskStatusCategory(input: {
-  statusType?: string | null;
-  statusLabel?: string | null;
-}): TaskStatusCategory {
-  const type = input.statusType?.toLowerCase() ?? "";
-  const label = input.statusLabel?.toLowerCase() ?? "";
-  if (
-    type.includes("done") ||
-    type.includes("closed") ||
-    label.includes("done") ||
-    label.includes("closed")
-  ) {
-    return "done";
-  }
-  if (
-    type.includes("progress") ||
-    label.includes("progress") ||
-    label.includes("doing") ||
-    label.includes("active")
-  ) {
-    return "in_progress";
-  }
-  if (label.includes("block")) {
-    return "blocked";
-  }
-  if (
-    type.includes("open") ||
-    label.includes("todo") ||
-    label.includes("to do") ||
-    label.includes("open")
-  ) {
-    return "open";
-  }
-  return "unknown";
-}
-
-/**
- * Users paste "Bearer pk_…" copied from docs and other tools; ClickUp wants
- * the raw token in the Authorization header. Normalized on save and on read so
- * already-stored tokens recover without re-entry.
- */
-export function normalizeClickUpToken(token: string): string {
-  return token
-    .trim()
-    .replace(/^bearer\b\s*/i, "")
-    .trim();
-}
-
-/**
- * ClickUp timestamps are millisecond epoch strings ("1567780450202"). Absent
- * fields come back as null/empty rather than "0", which would decode as 1970.
- */
-export function parseClickUpTimestamp(value: string | number | null | undefined): string | null {
-  if (value === null || value === undefined) return null;
-  const raw = String(value).trim();
-  if (raw.length === 0) return null;
-  const millis = Number(raw);
-  if (!Number.isFinite(millis) || millis <= 0) return null;
-  return Option.getOrNull(DateTime.make(millis).pipe(Option.map(DateTime.formatIso)));
-}
-
-/** Keep only well-formed hex colors ("#rgb"/"#rrggbb"), uppercased. */
-export function normalizeStatusColor(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const raw = value.trim().toUpperCase();
-  return /^#(?:[0-9A-F]{3}|[0-9A-F]{6})$/.test(raw) ? raw : null;
-}
-
-/** Prefer the markdown description ClickUp can serve over the HTML fallback. */
-export function pickClickUpDescription(task: ClickUpTaskResponse): string {
-  const markdown = task.markdown_description?.trim() ?? "";
-  if (markdown.length > 0) return markdown;
-  return task.description?.trim() ?? "";
-}
-
-export function clickUpListRef(task: ClickUpTaskResponse): {
-  externalListId: string | null;
-  externalListName: string | null;
-} {
-  const id = task.list?.id == null ? null : String(task.list.id).trim();
-  const name = task.list?.name?.trim() ?? null;
-  return {
-    externalListId: id && id.length > 0 ? id : null,
-    externalListName: name && name.length > 0 ? name : null,
-  };
-}
-
-/** Assignee usernames are the stable display value used for panel filters. */
-export function clickUpAssignees(task: ClickUpTaskResponse): ReadonlyArray<string> {
-  const names = new Set<string>();
-  for (const assignee of task.assignees ?? []) {
-    const name = assignee?.username?.trim() ?? "";
-    if (name.length > 0) names.add(name);
-  }
-  return [...names].toSorted((left, right) => left.localeCompare(right));
-}
-
-/**
- * Folderless lists surface a hidden folder named after their space; treat
- * those as having no folder so they browse at the top level.
- */
-export function clickUpFolderRef(task: ClickUpTaskResponse): {
-  externalFolderId: string | null;
-  externalFolderName: string | null;
-} {
-  const folder = task.folder;
-  const id = folder?.id == null ? null : String(folder.id).trim();
-  const name = folder?.name?.trim() ?? "";
-  if (folder?.hidden === true || !id || !name) {
-    return { externalFolderId: null, externalFolderName: null };
-  }
-  return { externalFolderId: id, externalFolderName: name };
-}
+/** Provider-backed registry rows use deterministic ids; local rows use uuids. */
+const externalRowId = (provider: string, externalId: string): string => `${provider}:${externalId}`;
 
 const decodeNoteRow = Schema.decodeSync(TaskNoteSchema);
 const decodeTaskRow = Schema.decodeSync(TaskSchema);
 const decodeFacets = Schema.decodeSync(TaskFacets);
-const decodeAttachment = Schema.decodeSync(TaskAttachment);
-const decodeClickUpComment = Schema.decodeSync(TaskClickUpCommentSchema);
-
-/**
- * Normalize ClickUp's attachment payload for the detail view. Entries without
- * an id or download URL are dropped; a missing title falls back to the URL's
- * file name so files always render something meaningful.
- */
-export function mapClickUpAttachments(
-  attachments: ReadonlyArray<ClickUpAttachmentResponse>,
-): Array<TaskAttachment> {
-  const mapped: Array<TaskAttachment> = [];
-  for (const attachment of attachments) {
-    const id = attachment.id == null ? "" : String(attachment.id).trim();
-    const url = attachment.url?.trim() ?? "";
-    if (id.length === 0 || url.length === 0) continue;
-    const size = attachment.size == null ? null : Number(attachment.size);
-    mapped.push(
-      decodeAttachment({
-        id,
-        title: attachment.title?.trim() || url.split("/").pop()?.trim() || "Attachment",
-        extension: attachment.extension?.trim() || null,
-        size: size !== null && Number.isFinite(size) ? size : null,
-        url,
-        thumbnailUrl:
-          attachment.thumbnail_large?.trim() || attachment.thumbnail_small?.trim() || null,
-        createdAt: parseClickUpTimestamp(attachment.date),
-      }),
-    );
-  }
-  return mapped;
-}
-
-/**
- * Normalize ClickUp's comment payload for the detail view. Comments without an
- * id or body are dropped; the plain-text body wins over the markup variant so
- * tags never render raw. Replies keep their parent's comment id for threading.
- */
-export function mapClickUpComments(
-  comments: ReadonlyArray<ClickUpCommentResponse>,
-): Array<TaskClickUpComment> {
-  const mapped: Array<TaskClickUpComment> = [];
-  for (const comment of comments) {
-    const id = comment.id == null ? "" : String(comment.id).trim();
-    const body = comment.text_content?.trim() || comment.comment_text?.trim() || "";
-    if (id.length === 0 || body.length === 0) continue;
-    const parent = comment.parent == null ? "" : String(comment.parent).trim();
-    mapped.push(
-      decodeClickUpComment({
-        id,
-        parentId: parent.length === 0 || parent === "0" ? null : parent,
-        body,
-        authorName: comment.user?.username?.trim() || "ClickUp user",
-        authorAvatarUrl: comment.user?.profilePicture?.trim() || null,
-        authorColor: normalizeStatusColor(comment.user?.color),
-        createdAt: parseClickUpTimestamp(comment.date),
-        resolved: comment.resolved === true,
-      }),
-    );
-  }
-  // ClickUp serves comments oldest-first already; keep that stable even when a
-  // page boundary or clock skew shuffles the order.
-  return mapped.toSorted((left, right) =>
-    (left.createdAt ?? "9999").localeCompare(right.createdAt ?? "9999"),
-  );
-}
+const decodeTaskListRow = Schema.decodeSync(TaskList);
 
 function mapNoteRow(row: TaskNoteRow): TaskNote {
   return decodeNoteRow({
@@ -420,18 +185,18 @@ function mapNoteRow(row: TaskNoteRow): TaskNote {
 function mapTaskRow(row: TaskRow, notes: ReadonlyArray<TaskNote>): Task {
   return decodeTaskRow({
     id: row.id,
-    source: row.source,
+    provider: row.provider,
     title: row.title,
     description: row.description,
     statusLabel: row.statusLabel,
     statusCategory: row.statusCategory,
     statusColor: row.statusColor,
     linkedThreadId: row.linkedThreadId,
+    listId: row.listId,
+    listName: row.listName,
     externalTaskId: row.externalTaskId,
     externalCustomId: row.externalCustomId,
     externalUrl: row.externalUrl,
-    externalListId: row.externalListId,
-    externalListName: row.externalListName,
     assignees: parseJsonArray(row.assigneesJson),
     syncedAt: row.syncedAt,
     externalUpdatedAt: row.externalUpdatedAt,
@@ -452,217 +217,94 @@ export class TaskService extends Context.Service<
     readonly createManualTask: (
       input: CreateManualTaskInput,
     ) => Effect.Effect<Task, TaskServiceFailure>;
+    readonly createList: (
+      input: CreateTaskListInput,
+    ) => Effect.Effect<TaskList, TaskServiceFailure>;
+    readonly createFolder: (
+      input: CreateTaskFolderInput,
+    ) => Effect.Effect<TaskFolder, TaskServiceFailure>;
     readonly updateTask: (input: UpdateTaskInput) => Effect.Effect<Task, TaskServiceFailure>;
     readonly deleteTask: (input: DeleteTaskInput) => Effect.Effect<void, TaskServiceFailure>;
+    readonly deleteList: (input: DeleteTaskListInput) => Effect.Effect<void, TaskServiceFailure>;
+    readonly deleteFolder: (
+      input: DeleteTaskFolderInput,
+    ) => Effect.Effect<void, TaskServiceFailure>;
     readonly addNote: (input: AddTaskNoteInput) => Effect.Effect<Task, TaskServiceFailure>;
     readonly getTaskAttachments: (
       taskId: TaskId,
     ) => Effect.Effect<TaskAttachmentsResult, TaskServiceFailure>;
     readonly getTaskComments: (
       taskId: TaskId,
-    ) => Effect.Effect<TaskClickUpCommentsResult, TaskServiceFailure>;
-    readonly setClickUpToken: (token: string) => Effect.Effect<void, TaskServiceFailure>;
-    readonly clearClickUpToken: () => Effect.Effect<void, TaskServiceFailure>;
-    readonly getClickUpStatus: () => Effect.Effect<ClickUpConnectionStatus, TaskServiceFailure>;
-    readonly syncClickUpTasks: () => Effect.Effect<TaskPanel, TaskServiceFailure>;
+    ) => Effect.Effect<TaskCommentsResult, TaskServiceFailure>;
+    readonly setProviderCredential: (input: {
+      readonly providerId: string;
+      readonly token: string;
+    }) => Effect.Effect<void, TaskServiceFailure>;
+    readonly clearProviderCredential: (input: {
+      readonly providerId: string;
+    }) => Effect.Effect<void, TaskServiceFailure>;
+    readonly getProviderStatus: (input: {
+      readonly providerId: string;
+    }) => Effect.Effect<TaskProviderConnectionStatus, TaskServiceFailure>;
+    readonly syncProviderTasks: (input: {
+      readonly providerId: string;
+    }) => Effect.Effect<TaskPanel, TaskServiceFailure>;
   }
 >()("t3/tasks/TaskService") {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* Crypto.Crypto;
-  const httpClient = yield* HttpClient.HttpClient;
   const secretStore = yield* ServerSecretStore;
+  const registry = yield* TaskProviderRegistry;
 
   const nowIso = () => DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
-  const getClickUpToken = Effect.gen(function* () {
-    const token = yield* secretStore.get(CLICKUP_TOKEN_SECRET);
-    return Option.match(token, {
-      onNone: () => null,
-      onSome: (value) => normalizeClickUpToken(bytesToString(value)) || null,
-    });
-  });
-
-  const fetchJson = <T>(input: { readonly url: string; readonly token: string }) =>
-    httpClient
-      .execute(
-        HttpClientRequest.get(input.url).pipe(
-          HttpClientRequest.acceptJson,
-          HttpClientRequest.setHeader("Authorization", input.token),
-        ),
-      )
-      .pipe(
-        Effect.mapError((cause) =>
-          taskServiceError("clickup.fetch", `Request failed for ${input.url}`, cause),
-        ),
-        Effect.flatMap(
-          HttpClientResponse.matchStatus({
-            "2xx": (response) =>
-              response.json.pipe(
-                Effect.map((body) => body as T),
-                Effect.mapError((cause) =>
-                  taskServiceError("clickup.fetch", "ClickUp returned invalid JSON", cause),
-                ),
-              ),
-            orElse: (response) =>
-              response.text.pipe(
-                Effect.mapError((cause) =>
-                  taskServiceError("clickup.fetch", "Failed to read ClickUp error response", cause),
-                ),
-                Effect.flatMap((body) =>
-                  taskServiceError(
-                    "clickup.fetch",
-                    response.status === 401
-                      ? "ClickUp rejected this token (401). Save a personal API token (pk_…), without a Bearer prefix."
-                      : `Request failed (${response.status}): ${body || "unexpected response"}`,
-                  ),
-                ),
-              ),
-          }),
-        ),
-      );
-
-  const fetchClickUpWorkspaces = (token: string) =>
+  const readCredential = (adapter: TaskProviderAdapter) =>
     Effect.gen(function* () {
-      const payload = yield* fetchJson<ClickUpWorkspaceResponse>({
-        url: "https://api.clickup.com/api/v2/team",
-        token,
+      const token = yield* secretStore.get(adapter.credentialSecretKey);
+      return Option.match(token, {
+        onNone: () => null,
+        onSome: (value) => adapter.normalizeCredential(bytesToString(value)) || null,
       });
-      return (
-        payload.teams?.flatMap((workspace): ClickUpWorkspaceSummary[] => {
-          const id = workspace.id == null ? null : String(workspace.id).trim();
-          const name = workspace.name?.trim() ?? "";
-          return id && name ? [{ id, name }] : [];
-        }) ?? []
-      );
     });
 
-  // ClickUp pages at 100 tasks; the hard cap bounds a single sync so a huge
-  // workspace cannot stall it indefinitely. 50 pages = 5000 tasks.
-  const TASK_SYNC_MAX_PAGES = 50;
-
-  // Comment threads are far smaller than task lists, but the cap still bounds
-  // a runaway pagination chain to the same end.
-  const TASK_COMMENTS_MAX_PAGES = 10;
-
-  // Get Task Comments serves 25 comments per page with no has_more flag.
-  const CLICKUP_COMMENTS_PAGE_SIZE = 25;
-
-  const fetchClickUpTasks = (input: {
-    readonly token: string;
-    readonly syncConfig: TaskSyncConfig;
-  }) =>
-    Effect.gen(function* () {
-      const tasks: ClickUpTaskResponse[] = [];
-      for (let page = 0; page < TASK_SYNC_MAX_PAGES; page += 1) {
-        const url = new URL(
-          `https://api.clickup.com/api/v2/team/${encodeURIComponent(input.syncConfig.workspaceId)}/task`,
-        );
-        url.searchParams.set("page", String(page));
-        url.searchParams.set("include_closed", "true");
-        url.searchParams.set("subtasks", "true");
-        url.searchParams.set("include_markdown_description", "true");
-        for (const listId of input.syncConfig.listIds) {
-          url.searchParams.append("list_ids[]", listId);
-        }
-        const payload = yield* fetchJson<ClickUpTaskListResponse>({
-          url: url.toString(),
-          token: input.token,
-        });
-        const pageTasks = payload.tasks ?? [];
-        tasks.push(...pageTasks);
-        if (payload.last_page === true || pageTasks.length < 100) {
-          break;
-        }
-      }
-      return tasks;
-    });
-  /**
-   * ClickUp keeps thread replies off the task comment list: a threaded comment
-   * carries a reply_count and serves its replies from a per-comment endpoint.
-   * Fetch those and tag them with the parent comment id so the detail view can
-   * group threads. Pages follow `start` + `start_id`, both required together.
-   * Reply fetches run after all pages with bounded concurrency — each is a
-   * full ClickUp round trip, and ClickUp latency spikes make sequential
-   * fetching exceed the client's request timeout.
-   */
-  const fetchClickUpComments = (input: {
-    readonly externalTaskId: string;
-    readonly token: string;
-  }) =>
-    Effect.gen(function* () {
-      const topLevel: ClickUpCommentResponse[] = [];
-      let startId: string | null = null;
-      let start: string | null = null;
-      for (let page = 0; page < TASK_COMMENTS_MAX_PAGES; page += 1) {
-        const url = new URL(
-          `https://api.clickup.com/api/v2/task/${encodeURIComponent(input.externalTaskId)}/comment`,
-        );
-        if (startId && start) {
-          url.searchParams.set("start_id", startId);
-          url.searchParams.set("start", start);
-        }
-        const payload = yield* fetchJson<ClickUpCommentsResponse>({
-          url: url.toString(),
-          token: input.token,
-        });
-        const pageComments = [...(payload.comments ?? [])];
-        topLevel.push(...pageComments);
-        const last = pageComments[pageComments.length - 1];
-        const lastId = last?.id == null ? null : String(last.id).trim();
-        const lastDate = last?.date == null ? null : String(last.date).trim();
-        const canPage = lastId !== null && lastDate !== null && lastId !== startId;
-        const more = payload.has_more === true || pageComments.length >= CLICKUP_COMMENTS_PAGE_SIZE;
-        if (!more || !canPage) {
-          break;
-        }
-        startId = lastId;
-        start = lastDate;
-      }
-
-      const comments = [...topLevel];
-      const threadedIds = topLevel
-        .filter((comment) => Number(comment.reply_count ?? 0) > 0)
-        .map((comment) => String(comment.id));
-      const replyPages = yield* Effect.forEach(
-        threadedIds,
-        (parentId) =>
-          fetchJson<ClickUpCommentsResponse>({
-            url: `https://api.clickup.com/api/v2/comment/${encodeURIComponent(parentId)}/reply`,
-            token: input.token,
-          }).pipe(Effect.map((payload) => payload.comments ?? [])),
-        { concurrency: 4 },
-      );
-      threadedIds.forEach((parentId, index) => {
-        for (const reply of replyPages[index] ?? []) {
-          // Replies carry no parent; the thread parent is the fetch source.
-          comments.push({ ...reply, parent: parentId });
-        }
-      });
-      return comments;
-    });
-
-  const loadSyncConfigRow = () =>
-    sql<TaskSyncConfigRow>`
+  const loadProviderConfigRow = (providerId: string) =>
+    sql<ProviderConfigRow>`
       SELECT
-        workspace_id AS "workspaceId",
-        workspace_name AS "workspaceName",
-        list_ids_json AS "listIdsJson",
+        provider,
+        config_json AS "configJson",
         last_sync_at AS "lastSyncAt",
         last_sync_error AS "lastSyncError"
-      FROM task_sync_config
-      WHERE id = 1
+      FROM task_provider_configs
+      WHERE provider = ${providerId}
     `.pipe(Effect.map((rows) => rows[0] ?? null));
 
-  const mapSyncConfig = (row: TaskSyncConfigRow | null): TaskSyncConfig | null =>
-    row
-      ? {
-          workspaceId: row.workspaceId,
-          ...(row.workspaceName ? { workspaceName: row.workspaceName } : {}),
-          listIds: [...parseJsonArray(row.listIdsJson)],
-        }
-      : null;
+  const upsertProviderConfigRow = (input: {
+    readonly providerId: string;
+    readonly configJson: string;
+    readonly lastSyncAt?: string | null;
+    readonly lastSyncError?: string | null;
+  }) =>
+    sql`
+      INSERT INTO task_provider_configs (
+        provider,
+        config_json,
+        last_sync_at,
+        last_sync_error
+      )
+      VALUES (
+        ${input.providerId},
+        ${input.configJson},
+        ${input.lastSyncAt ?? null},
+        ${input.lastSyncError ?? null}
+      )
+      ON CONFLICT (provider)
+      DO UPDATE SET
+        config_json = excluded.config_json,
+        last_sync_at = excluded.last_sync_at,
+        last_sync_error = excluded.last_sync_error
+    `.pipe(Effect.asVoid);
 
   const normalizeQueryFilter = (filter: TaskQueryFilter | undefined): NormalizedTaskQueryFilter => {
     const dedupe = (values: ReadonlyArray<string>): Array<string> => [
@@ -685,22 +327,26 @@ const make = Effect.gen(function* () {
 
   const taskFilterFragment = (filter: NormalizedTaskQueryFilter) => {
     const clauses: Array<string | Fragment> = [];
-    // A selection can name lists directly, folders (denormalized onto each
-    // synced task), both, or specific tasks — any of the named scopes match.
-    const listScope: Array<Fragment> = [];
+    // A selection can name lists directly, folders (resolved through their
+    // lists), both, or specific tasks — any of the named scopes match.
+    const scope: Array<Fragment> = [];
     if (filter.listIds.length > 0) {
-      listScope.push(sql.in("external_list_id", filter.listIds));
+      scope.push(sql.in("tasks.list_id", filter.listIds));
     }
     if (filter.folderIds.length > 0) {
-      listScope.push(sql.in("external_folder_id", filter.folderIds));
+      scope.push(
+        sql`tasks.list_id IN (
+          SELECT task_lists.list_id FROM task_lists
+          WHERE ${sql.in("task_lists.folder_id", filter.folderIds)}
+        )`,
+      );
     }
     if (filter.taskIds.length > 0) {
-      listScope.push(sql.in("task_id", filter.taskIds));
+      scope.push(sql.in("tasks.task_id", filter.taskIds));
     }
-    const listScopeClause =
-      listScope.length === 0 ? null : listScope.length === 1 ? listScope[0] : sql.or(listScope);
-    if (listScopeClause) {
-      clauses.push(listScopeClause);
+    const scopeClause = scope.length === 0 ? null : scope.length === 1 ? scope[0] : sql.or(scope);
+    if (scopeClause) {
+      clauses.push(scopeClause);
     }
     if (filter.statuses.length > 0) {
       clauses.push(sql.in("status_category", filter.statuses));
@@ -726,38 +372,41 @@ const make = Effect.gen(function* () {
       WHERE ${where}
     `.pipe(Effect.map((rows) => rows[0]?.count ?? 0));
 
+  const taskRowSelection = sql`
+    SELECT
+      tasks.task_id AS "id",
+      tasks.provider AS "provider",
+      tasks.title AS "title",
+      tasks.description AS "description",
+      tasks.status_label AS "statusLabel",
+      tasks.status_category AS "statusCategory",
+      tasks.status_color AS "statusColor",
+      tasks.linked_thread_id AS "linkedThreadId",
+      tasks.list_id AS "listId",
+      task_lists.name AS "listName",
+      tasks.external_task_id AS "externalTaskId",
+      tasks.external_custom_id AS "externalCustomId",
+      tasks.external_url AS "externalUrl",
+      tasks.assignees_json AS "assigneesJson",
+      tasks.synced_at AS "syncedAt",
+      tasks.external_updated_at AS "externalUpdatedAt",
+      tasks.created_at AS "createdAt",
+      tasks.updated_at AS "updatedAt"
+    FROM tasks
+    LEFT JOIN task_lists ON task_lists.list_id = tasks.list_id
+  `;
+
   const listFilteredTasks = (where: Fragment, page: number, pageSize: number) =>
     sql<TaskRow>`
-      SELECT
-        task_id AS "id",
-        source,
-        title,
-        description,
-        status_label AS "statusLabel",
-        status_category AS "statusCategory",
-        status_color AS "statusColor",
-        linked_thread_id AS "linkedThreadId",
-        external_task_id AS "externalTaskId",
-        external_custom_id AS "externalCustomId",
-        external_url AS "externalUrl",
-        external_list_id AS "externalListId",
-        external_list_name AS "externalListName",
-        external_folder_id AS "externalFolderId",
-        external_folder_name AS "externalFolderName",
-        assignees_json AS "assigneesJson",
-        synced_at AS "syncedAt",
-        external_updated_at AS "externalUpdatedAt",
-        created_at AS "createdAt",
-        updated_at AS "updatedAt"
-      FROM tasks
+      ${taskRowSelection}
       WHERE ${where}
       ORDER BY
-        CASE status_category
+        CASE tasks.status_category
           WHEN 'done' THEN 1
           ELSE 0
         END ASC,
-        updated_at DESC,
-        created_at DESC
+        tasks.updated_at DESC,
+        tasks.created_at DESC
       LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
     `;
 
@@ -778,25 +427,44 @@ const make = Effect.gen(function* () {
 
   const loadTaskFacets = () =>
     Effect.gen(function* () {
-      const [listRows, statusRows, assigneeRows] = yield* Effect.all([
+      const [folderRows, listRows, statusRows, assigneeRows] = yield* Effect.all([
         sql<{
           readonly id: string;
+          readonly provider: TaskProviderId;
+          readonly name: string;
+          readonly count: number;
+        }>`
+          SELECT
+            task_folders.folder_id AS "id",
+            task_folders.provider,
+            task_folders.name,
+            COUNT(tasks.task_id) AS "count"
+          FROM task_folders
+          LEFT JOIN task_lists ON task_lists.folder_id = task_folders.folder_id
+          LEFT JOIN tasks ON tasks.list_id = task_lists.list_id
+          GROUP BY task_folders.folder_id
+          ORDER BY task_folders.name ASC
+        `,
+        sql<{
+          readonly id: string;
+          readonly provider: TaskProviderId;
           readonly name: string | null;
           readonly folderId: string | null;
           readonly folderName: string | null;
           readonly count: number;
         }>`
           SELECT
-            external_list_id AS "id",
-            MAX(external_list_name) AS "name",
-            MAX(external_folder_id) AS "folderId",
-            MAX(external_folder_name) AS "folderName",
-            COUNT(*) AS "count"
-          FROM tasks
-          WHERE source = ${"clickup"}
-            AND external_list_id IS NOT NULL
-          GROUP BY external_list_id
-          ORDER BY "name" ASC
+            task_lists.list_id AS "id",
+            task_lists.provider,
+            task_lists.name,
+            task_lists.folder_id AS "folderId",
+            task_folders.name AS "folderName",
+            COUNT(tasks.task_id) AS "count"
+          FROM task_lists
+          LEFT JOIN task_folders ON task_folders.folder_id = task_lists.folder_id
+          LEFT JOIN tasks ON tasks.list_id = task_lists.list_id
+          GROUP BY task_lists.list_id
+          ORDER BY task_lists.name ASC
         `,
         sql<{ readonly value: string; readonly count: number }>`
           SELECT status_category AS "value", COUNT(*) AS "count"
@@ -812,6 +480,12 @@ const make = Effect.gen(function* () {
         `,
       ]);
       return decodeFacets({
+        folders: folderRows.map((row) => ({
+          id: row.id,
+          provider: row.provider,
+          name: row.name,
+          count: row.count,
+        })),
         lists: listRows.flatMap((row) => {
           const name = row.name?.trim() ?? "";
           if (name.length === 0) return [];
@@ -821,6 +495,7 @@ const make = Effect.gen(function* () {
           return [
             {
               id: row.id,
+              provider: row.provider,
               name,
               count: row.count,
               folderId: hasFolder ? folderId : null,
@@ -836,28 +511,7 @@ const make = Effect.gen(function* () {
   const loadTaskRowById = (taskId: TaskId) =>
     Effect.gen(function* () {
       const rows = yield* sql<TaskRow>`
-        SELECT
-          task_id AS "id",
-          source,
-          title,
-          description,
-          status_label AS "statusLabel",
-          status_category AS "statusCategory",
-          status_color AS "statusColor",
-          linked_thread_id AS "linkedThreadId",
-          external_task_id AS "externalTaskId",
-          external_custom_id AS "externalCustomId",
-          external_url AS "externalUrl",
-          external_list_id AS "externalListId",
-          external_list_name AS "externalListName",
-          external_folder_id AS "externalFolderId",
-          external_folder_name AS "externalFolderName",
-          assignees_json AS "assigneesJson",
-          synced_at AS "syncedAt",
-          external_updated_at AS "externalUpdatedAt",
-          created_at AS "createdAt",
-          updated_at AS "updatedAt"
-        FROM tasks
+        ${taskRowSelection}
         WHERE task_id = ${taskId}
       `;
       const row = rows[0];
@@ -875,24 +529,74 @@ const make = Effect.gen(function* () {
       return mapTaskRow(row, notes);
     });
 
-  const upsertTaskRow = (row: TaskRow) =>
+  const upsertFolderRow = (row: TaskFolderRow, timestamp: string) =>
+    sql`
+      INSERT INTO task_folders (
+        folder_id,
+        provider,
+        external_folder_id,
+        name,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${row.id},
+        ${row.provider},
+        ${row.externalFolderId},
+        ${row.name},
+        ${timestamp},
+        ${timestamp}
+      )
+      ON CONFLICT (folder_id)
+      DO UPDATE SET
+        name = excluded.name,
+        updated_at = excluded.updated_at
+    `.pipe(Effect.asVoid);
+
+  const upsertListRow = (row: TaskListRow, timestamp: string) =>
+    sql`
+      INSERT INTO task_lists (
+        list_id,
+        provider,
+        external_list_id,
+        folder_id,
+        name,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${row.id},
+        ${row.provider},
+        ${row.externalListId},
+        ${row.folderId},
+        ${row.name},
+        ${timestamp},
+        ${timestamp}
+      )
+      ON CONFLICT (list_id)
+      DO UPDATE SET
+        -- A payload's folder ref can regress to null (hidden folders); keep
+        -- the previously known folder when the fresh one is missing.
+        folder_id = COALESCE(excluded.folder_id, task_lists.folder_id),
+        name = excluded.name,
+        updated_at = excluded.updated_at
+    `.pipe(Effect.asVoid);
+
+  const upsertTaskRow = (row: TaskUpsertRow) =>
     sql`
       INSERT INTO tasks (
         task_id,
-        source,
+        provider,
         title,
         description,
         status_label,
         status_category,
         status_color,
         linked_thread_id,
+        list_id,
         external_task_id,
         external_custom_id,
         external_url,
-        external_list_id,
-        external_list_name,
-        external_folder_id,
-        external_folder_name,
         assignees_json,
         synced_at,
         external_updated_at,
@@ -901,20 +605,17 @@ const make = Effect.gen(function* () {
       )
       VALUES (
         ${row.id},
-        ${row.source},
+        ${row.provider},
         ${row.title},
         ${row.description},
         ${row.statusLabel},
         ${row.statusCategory},
         ${row.statusColor},
         ${row.linkedThreadId},
+        ${row.listId},
         ${row.externalTaskId},
         ${row.externalCustomId},
         ${row.externalUrl},
-        ${row.externalListId},
-        ${row.externalListName},
-        ${row.externalFolderId},
-        ${row.externalFolderName},
         ${row.assigneesJson},
         ${row.syncedAt},
         ${row.externalUpdatedAt},
@@ -923,19 +624,17 @@ const make = Effect.gen(function* () {
       )
       ON CONFLICT (task_id)
       DO UPDATE SET
+        provider = excluded.provider,
         title = excluded.title,
         description = excluded.description,
         status_label = excluded.status_label,
         status_category = excluded.status_category,
         status_color = excluded.status_color,
         linked_thread_id = excluded.linked_thread_id,
+        list_id = excluded.list_id,
         external_task_id = excluded.external_task_id,
         external_custom_id = excluded.external_custom_id,
         external_url = excluded.external_url,
-        external_list_id = excluded.external_list_id,
-        external_list_name = excluded.external_list_name,
-        external_folder_id = excluded.external_folder_id,
-        external_folder_name = excluded.external_folder_name,
         assignees_json = excluded.assignees_json,
         synced_at = excluded.synced_at,
         external_updated_at = excluded.external_updated_at,
@@ -943,56 +642,35 @@ const make = Effect.gen(function* () {
         updated_at = excluded.updated_at
     `.pipe(Effect.asVoid);
 
-  const upsertSyncConfigRow = (input: {
-    readonly syncConfig: TaskSyncConfig;
-    readonly lastSyncAt?: string | null;
-    readonly lastSyncError?: string | null;
-  }) =>
-    sql`
-      INSERT INTO task_sync_config (
-        id,
-        provider,
-        workspace_id,
-        workspace_name,
-        list_ids_json,
-        last_sync_at,
-        last_sync_error
-      )
-      VALUES (
-        1,
-        ${CLICKUP_SYNC_PROVIDER},
-        ${input.syncConfig.workspaceId},
-        ${input.syncConfig.workspaceName ?? null},
-        ${JSON.stringify(input.syncConfig.listIds)},
-        ${input.lastSyncAt ?? null},
-        ${input.lastSyncError ?? null}
-      )
-      ON CONFLICT (id)
-      DO UPDATE SET
-        provider = excluded.provider,
-        workspace_id = excluded.workspace_id,
-        workspace_name = excluded.workspace_name,
-        list_ids_json = excluded.list_ids_json,
-        last_sync_at = excluded.last_sync_at,
-        last_sync_error = excluded.last_sync_error
-    `.pipe(Effect.asVoid);
-
   const getPanel: TaskService["Service"]["getPanel"] = () =>
     Effect.gen(function* () {
-      // Fully local reads: clients poll the panel, so no ClickUp network calls
-      // live here. Workspace discovery only happens in sync and status paths.
-      const [facets, syncRow, token] = yield* Effect.all([
+      // Fully local reads: clients poll the panel, so no provider network calls
+      // live here. Account labels come from stored configs; discovery only
+      // happens in sync and status paths.
+      const [facets, providerStates] = yield* Effect.all([
         loadTaskFacets(),
-        loadSyncConfigRow(),
-        getClickUpToken,
+        Effect.forEach(
+          registry.providers,
+          (adapter) =>
+            Effect.gen(function* () {
+              const [credential, configRow] = yield* Effect.all([
+                readCredential(adapter),
+                loadProviderConfigRow(adapter.id),
+              ]);
+              return {
+                providerId: adapter.id,
+                label: adapter.label,
+                credentialConfigured: credential !== null,
+                accountLabel: adapter.cachedAccountLabel(configRow?.configJson ?? null),
+                lastSyncAt: configRow?.lastSyncAt ?? null,
+                lastSyncError: configRow?.lastSyncError ?? null,
+              } satisfies TaskProviderState;
+            }),
+          { discard: false },
+        ),
       ]);
       return {
-        clickup: {
-          tokenConfigured: token !== null,
-          syncConfig: mapSyncConfig(syncRow),
-          lastSyncAt: syncRow?.lastSyncAt ?? null,
-          lastSyncError: syncRow?.lastSyncError ?? null,
-        },
+        providers: providerStates,
         facets,
       } satisfies TaskPanel;
     }).pipe(
@@ -1037,14 +715,14 @@ const make = Effect.gen(function* () {
         readonly threadId: string;
         readonly title: string;
         readonly statusCategory: TaskStatusCategory;
-        readonly source: "manual" | "clickup";
+        readonly provider: TaskProviderId;
       }>`
         SELECT
           task_id AS "taskId",
           linked_thread_id AS "threadId",
           title,
           status_category AS "statusCategory",
-          source
+          provider
         FROM tasks
         WHERE linked_thread_id IS NOT NULL
         ORDER BY updated_at DESC
@@ -1055,7 +733,7 @@ const make = Effect.gen(function* () {
           threadId: ThreadId.make(row.threadId),
           title: row.title,
           statusCategory: row.statusCategory,
-          source: row.source,
+          provider: row.provider,
         })),
       } satisfies TaskLinksResult;
     }).pipe(
@@ -1064,26 +742,45 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const requireListAdapter = (listId: string) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<TaskListRow>`
+        SELECT
+          list_id AS "id",
+          provider,
+          external_list_id AS "externalListId",
+          folder_id AS "folderId",
+          name
+        FROM task_lists
+        WHERE list_id = ${listId}
+      `;
+      const row = rows[0];
+      if (!row) {
+        return yield* taskServiceError("tasks.createManualTask", `Unknown task list: ${listId}`);
+      }
+      return row;
+    });
+
   const createManualTask: TaskService["Service"]["createManualTask"] = (input) =>
     Effect.gen(function* () {
       const createdAt = yield* nowIso();
       const id = yield* crypto.randomUUIDv4;
-      const row: TaskRow = {
+      if (input.listId) {
+        yield* requireListAdapter(input.listId);
+      }
+      const row: TaskUpsertRow = {
         id,
-        source: "manual",
+        provider: MANUAL_TASK_PROVIDER,
         title: input.title,
         description: input.description?.trim() ?? "",
         statusLabel: "To do",
         statusCategory: "open",
         statusColor: null,
         linkedThreadId: null,
+        listId: input.listId ?? null,
         externalTaskId: null,
         externalCustomId: null,
         externalUrl: null,
-        externalListId: null,
-        externalListName: null,
-        externalFolderId: null,
-        externalFolderName: null,
         assigneesJson: stringifyJsonArray([]),
         syncedAt: null,
         externalUpdatedAt: null,
@@ -1098,13 +795,106 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const createList: TaskService["Service"]["createList"] = (input) =>
+    Effect.gen(function* () {
+      let folderId: string | null = null;
+      if (input.folderId) {
+        const folderRows = yield* sql<TaskFolderRow>`
+          SELECT
+            folder_id AS "id",
+            provider,
+            external_folder_id AS "externalFolderId",
+            name
+          FROM task_folders
+          WHERE folder_id = ${input.folderId}
+        `;
+        const folder = folderRows[0];
+        if (!folder) {
+          return yield* taskServiceError(
+            "tasks.createList",
+            `Unknown task folder: ${input.folderId}`,
+          );
+        }
+        if (folder.provider !== MANUAL_TASK_PROVIDER) {
+          return yield* taskServiceError(
+            "tasks.createList",
+            "Manual lists can only nest under manual folders.",
+          );
+        }
+        folderId = folder.id;
+      }
+      const createdAt = yield* nowIso();
+      const id = yield* crypto.randomUUIDv4;
+      const row: TaskListRow = {
+        id,
+        provider: MANUAL_TASK_PROVIDER,
+        externalListId: null,
+        folderId,
+        name: input.name,
+      };
+      yield* sql`
+        INSERT INTO task_lists (
+          list_id,
+          provider,
+          external_list_id,
+          folder_id,
+          name,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${row.id},
+          ${row.provider},
+          ${row.externalListId},
+          ${row.folderId},
+          ${row.name},
+          ${createdAt},
+          ${createdAt}
+        )
+      `;
+      return decodeTaskListRow({
+        id: row.id,
+        provider: row.provider,
+        externalListId: row.externalListId,
+        folderId: row.folderId,
+        name: row.name,
+      });
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.createList", "Failed to create list", cause),
+      ),
+    );
+
+  const createFolder: TaskService["Service"]["createFolder"] = (input) =>
+    Effect.gen(function* () {
+      const timestamp = yield* nowIso();
+      const id = yield* crypto.randomUUIDv4;
+      const row: TaskFolderRow = {
+        id,
+        provider: MANUAL_TASK_PROVIDER,
+        externalFolderId: null,
+        name: input.name,
+      };
+      yield* upsertFolderRow(row, timestamp);
+      return {
+        id,
+        provider: row.provider,
+        externalFolderId: row.externalFolderId,
+        name: row.name,
+      } satisfies TaskFolder;
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.createFolder", "Failed to create folder", cause),
+      ),
+    );
+
   const updateTask: TaskService["Service"]["updateTask"] = (input) =>
     Effect.gen(function* () {
       const current = yield* loadTaskRowById(input.taskId);
       const updatedAt = yield* nowIso();
       yield* upsertTaskRow({
         id: current.id,
-        source: current.source,
+        provider: current.provider,
         title: input.title ?? current.title,
         description: input.description ?? current.description,
         statusLabel: input.statusLabel ?? current.statusLabel,
@@ -1112,13 +902,10 @@ const make = Effect.gen(function* () {
         statusColor: current.statusColor,
         linkedThreadId:
           input.linkedThreadId !== undefined ? input.linkedThreadId : current.linkedThreadId,
+        listId: current.listId,
         externalTaskId: current.externalTaskId,
         externalCustomId: current.externalCustomId,
         externalUrl: current.externalUrl,
-        externalListId: current.externalListId,
-        externalListName: current.externalListName,
-        externalFolderId: current.externalFolderId,
-        externalFolderName: current.externalFolderName,
         assigneesJson: current.assigneesJson,
         syncedAt: current.syncedAt,
         externalUpdatedAt: current.externalUpdatedAt,
@@ -1135,8 +922,11 @@ const make = Effect.gen(function* () {
   const deleteTask: TaskService["Service"]["deleteTask"] = (input) =>
     Effect.gen(function* () {
       const current = yield* loadTaskById(input.taskId);
-      if (current.source !== "manual") {
-        return yield* taskServiceError("tasks.deleteTask", "Only manual tasks can be deleted.");
+      if (current.provider !== MANUAL_TASK_PROVIDER) {
+        return yield* taskServiceError(
+          "tasks.deleteTask",
+          "Only manual tasks can be deleted; synced tasks are managed by their provider.",
+        );
       }
       yield* sql`
         DELETE FROM task_notes
@@ -1149,6 +939,93 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError("tasks.deleteTask", "Failed to delete task", cause),
+      ),
+    );
+
+  /** Manual lists go with everything they hold; synced lists are the provider's. */
+  const deleteList: TaskService["Service"]["deleteList"] = (input) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<TaskListRow>`
+        SELECT
+          list_id AS "id",
+          provider,
+          external_list_id AS "externalListId",
+          folder_id AS "folderId",
+          name
+        FROM task_lists
+        WHERE list_id = ${input.listId}
+      `;
+      const list = rows[0];
+      if (!list) {
+        return yield* taskServiceError("tasks.deleteList", `Unknown task list: ${input.listId}`);
+      }
+      if (list.provider !== MANUAL_TASK_PROVIDER) {
+        return yield* taskServiceError(
+          "tasks.deleteList",
+          "Only manual lists can be deleted; synced lists are managed by their provider.",
+        );
+      }
+      yield* sql`
+        DELETE FROM task_notes
+        WHERE task_id IN (SELECT task_id FROM tasks WHERE list_id = ${input.listId})
+      `;
+      yield* sql`
+        DELETE FROM tasks WHERE list_id = ${input.listId}
+      `;
+      yield* sql`
+        DELETE FROM task_lists WHERE list_id = ${input.listId}
+      `;
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.deleteList", "Failed to delete list", cause),
+      ),
+    );
+
+  /** Recursive: a folder takes its lists and their tasks' notes with it. */
+  const deleteFolder: TaskService["Service"]["deleteFolder"] = (input) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<TaskFolderRow>`
+        SELECT
+          folder_id AS "id",
+          provider,
+          external_folder_id AS "externalFolderId",
+          name
+        FROM task_folders
+        WHERE folder_id = ${input.folderId}
+      `;
+      const folder = rows[0];
+      if (!folder) {
+        return yield* taskServiceError(
+          "tasks.deleteFolder",
+          `Unknown task folder: ${input.folderId}`,
+        );
+      }
+      if (folder.provider !== MANUAL_TASK_PROVIDER) {
+        return yield* taskServiceError(
+          "tasks.deleteFolder",
+          "Only manual folders can be deleted; synced folders are managed by their provider.",
+        );
+      }
+      yield* sql`
+        DELETE FROM task_notes
+        WHERE task_id IN (
+          SELECT task_id FROM tasks
+          WHERE list_id IN (SELECT list_id FROM task_lists WHERE folder_id = ${input.folderId})
+        )
+      `;
+      yield* sql`
+        DELETE FROM tasks
+        WHERE list_id IN (SELECT list_id FROM task_lists WHERE folder_id = ${input.folderId})
+      `;
+      yield* sql`
+        DELETE FROM task_lists WHERE folder_id = ${input.folderId}
+      `;
+      yield* sql`
+        DELETE FROM task_folders WHERE folder_id = ${input.folderId}
+      `;
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.deleteFolder", "Failed to delete folder", cause),
       ),
     );
 
@@ -1185,27 +1062,29 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /** Detail fetches dispatch to the task's own provider; manual tasks answer empty. */
+  const providerFetchForTaskRow = (row: TaskRow) => {
+    if (row.provider === MANUAL_TASK_PROVIDER || !row.externalTaskId) return null;
+    const adapter = registry.get(row.provider);
+    if (!adapter) return null;
+    return { adapter, externalTaskId: row.externalTaskId };
+  };
+
   const getTaskAttachments: TaskService["Service"]["getTaskAttachments"] = (taskId) =>
     Effect.gen(function* () {
       const row = yield* loadTaskRowById(taskId);
-      // Manual tasks have nothing on ClickUp to ask for; answer empty without
-      // a network round trip (and without a token).
-      if (row.source !== "clickup" || !row.externalTaskId) {
+      const target = providerFetchForTaskRow(row);
+      if (!target) {
         return { attachments: [] } satisfies TaskAttachmentsResult;
       }
-      const token = yield* getClickUpToken;
-      if (!token) {
+      const credential = yield* readCredential(target.adapter);
+      if (!credential) {
         return { attachments: [] } satisfies TaskAttachmentsResult;
       }
-      // ClickUp has no "list attachments" route; Get Task returns them when
-      // present, so the detail view fetches the task itself.
-      const payload = yield* fetchJson<ClickUpTaskResponse>({
-        url: `https://api.clickup.com/api/v2/task/${encodeURIComponent(row.externalTaskId)}`,
-        token,
-      });
-      return {
-        attachments: mapClickUpAttachments(payload.attachments ?? []),
-      } satisfies TaskAttachmentsResult;
+      const attachments = yield* target.adapter
+        .fetchTaskAttachments({ credential, externalTaskId: target.externalTaskId })
+        .pipe(Effect.mapError((cause) => providerFailure("tasks.getTaskAttachments", cause)));
+      return { attachments } satisfies TaskAttachmentsResult;
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError("tasks.getTaskAttachments", "Failed to load task attachments", cause),
@@ -1215,113 +1094,192 @@ const make = Effect.gen(function* () {
   const getTaskComments: TaskService["Service"]["getTaskComments"] = (taskId) =>
     Effect.gen(function* () {
       const row = yield* loadTaskRowById(taskId);
-      // Manual tasks have nothing on ClickUp to ask for; answer empty without
-      // a network round trip (and without a token).
-      if (row.source !== "clickup" || !row.externalTaskId) {
-        return { comments: [] } satisfies TaskClickUpCommentsResult;
+      const target = providerFetchForTaskRow(row);
+      if (!target) {
+        return { comments: [] } satisfies TaskCommentsResult;
       }
-      const token = yield* getClickUpToken;
-      if (!token) {
-        return { comments: [] } satisfies TaskClickUpCommentsResult;
+      const credential = yield* readCredential(target.adapter);
+      if (!credential) {
+        return { comments: [] } satisfies TaskCommentsResult;
       }
-      const payload = yield* fetchClickUpComments({
-        externalTaskId: row.externalTaskId,
-        token,
-      });
-      return { comments: mapClickUpComments(payload) } satisfies TaskClickUpCommentsResult;
+      const comments = yield* target.adapter
+        .fetchTaskComments({ credential, externalTaskId: target.externalTaskId })
+        .pipe(Effect.mapError((cause) => providerFailure("tasks.getTaskComments", cause)));
+      return { comments } satisfies TaskCommentsResult;
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError("tasks.getTaskComments", "Failed to load task comments", cause),
       ),
     );
 
-  const setClickUpToken: TaskService["Service"]["setClickUpToken"] = (token) => {
-    const normalized = normalizeClickUpToken(token);
-    if (normalized.length === 0) {
-      return Effect.fail(
-        taskServiceError(
-          "tasks.setClickUpToken",
-          "Paste a ClickUp personal API token (pk_…), without a Bearer prefix.",
-        ),
-      );
-    }
-    return secretStore
-      .set(CLICKUP_TOKEN_SECRET, stringToBytes(normalized))
-      .pipe(
-        Effect.mapError((cause: SecretStoreError) =>
-          taskServiceError("tasks.setClickUpToken", "Failed to store ClickUp token", cause),
-        ),
-      );
-  };
+  const isProviderError = Schema.is(TaskProviderError);
 
-  const clearClickUpToken: TaskService["Service"]["clearClickUpToken"] = () =>
-    secretStore.get(CLICKUP_TOKEN_SECRET).pipe(
-      Effect.flatMap(
-        Option.match({
-          onNone: () => Effect.void,
-          onSome: () => secretStore.remove(CLICKUP_TOKEN_SECRET),
-        }),
-      ),
-      Effect.mapError((cause: SecretStoreError) =>
-        taskServiceError("tasks.clearClickUpToken", "Failed to clear ClickUp token", cause),
-      ),
-    );
+  const providerFailure = (operation: string, cause: unknown): TaskServiceError =>
+    isProviderError(cause)
+      ? taskServiceError(operation, cause.message, cause.cause)
+      : isTaskServiceError(cause)
+        ? cause
+        : taskServiceError(operation, "Provider request failed", cause);
 
-  const getClickUpStatus: TaskService["Service"]["getClickUpStatus"] = () =>
+  const setProviderCredential: TaskService["Service"]["setProviderCredential"] = (input) =>
     Effect.gen(function* () {
-      const [token, syncRow] = yield* Effect.all([getClickUpToken, loadSyncConfigRow()]);
-      let workspaceName = syncRow?.workspaceName?.trim() || null;
-      if (token && !workspaceName) {
-        // Before the first sync persists a workspace, name the account from
-        // the token's workspaces. Best effort: status still renders without it.
-        const workspaces = yield* fetchClickUpWorkspaces(token).pipe(
-          Effect.orElseSucceed(() => []),
+      const adapter = registry.get(input.providerId);
+      if (!adapter) {
+        return yield* taskServiceError(
+          "tasks.setProviderCredential",
+          `Unknown task provider: ${input.providerId}`,
         );
-        workspaceName = workspaces[0]?.name ?? null;
       }
-      return {
-        tokenConfigured: token !== null,
-        workspaceName,
-        lastSyncAt: syncRow?.lastSyncAt ?? null,
-        lastSyncError: syncRow?.lastSyncError ?? null,
-      } satisfies ClickUpConnectionStatus;
+      const normalized = adapter.normalizeCredential(input.token);
+      if (normalized.length === 0) {
+        return yield* taskServiceError(
+          "tasks.setProviderCredential",
+          `Paste a valid ${adapter.label} credential, without a Bearer prefix.`,
+        );
+      }
+      yield* secretStore
+        .set(adapter.credentialSecretKey, stringToBytes(normalized))
+        .pipe(
+          Effect.mapError((cause: SecretStoreError) =>
+            taskServiceError(
+              "tasks.setProviderCredential",
+              `Failed to store ${adapter.label} credential`,
+              cause,
+            ),
+          ),
+        );
     }).pipe(
       Effect.mapError((cause) =>
-        taskServiceError("tasks.getClickUpStatus", "Failed to read ClickUp status", cause),
+        taskServiceError(
+          "tasks.setProviderCredential",
+          isTaskServiceError(cause) ? cause.message : "Failed to store provider credential",
+          cause,
+        ),
       ),
     );
 
-  const runClickUpSync = (input: {
-    readonly token: string;
-    readonly syncConfig: TaskSyncConfig;
-    readonly syncRow: TaskSyncConfigRow | null;
+  const clearProviderCredential: TaskService["Service"]["clearProviderCredential"] = (input) =>
+    Effect.gen(function* () {
+      const adapter = registry.get(input.providerId);
+      if (!adapter) {
+        return yield* taskServiceError(
+          "tasks.clearProviderCredential",
+          `Unknown task provider: ${input.providerId}`,
+        );
+      }
+      yield* secretStore.get(adapter.credentialSecretKey).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.void,
+            onSome: () => secretStore.remove(adapter.credentialSecretKey),
+          }),
+        ),
+        Effect.mapError((cause: SecretStoreError) =>
+          taskServiceError(
+            "tasks.clearProviderCredential",
+            `Failed to clear ${adapter.label} credential`,
+            cause,
+          ),
+        ),
+      );
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError(
+          "tasks.clearProviderCredential",
+          isTaskServiceError(cause) ? cause.message : "Failed to clear provider credential",
+          cause,
+        ),
+      ),
+    );
+
+  const getProviderStatus: TaskService["Service"]["getProviderStatus"] = (input) =>
+    Effect.gen(function* () {
+      const adapter = registry.get(input.providerId);
+      if (!adapter) {
+        return yield* taskServiceError(
+          "tasks.getProviderStatus",
+          `Unknown task provider: ${input.providerId}`,
+        );
+      }
+      const [credential, configRow] = yield* Effect.all([
+        readCredential(adapter),
+        loadProviderConfigRow(adapter.id),
+      ]);
+      let accountLabel = adapter.cachedAccountLabel(configRow?.configJson ?? null);
+      if (credential && !accountLabel) {
+        accountLabel = yield* adapter
+          .accountLabel({ credential, configJson: configRow?.configJson ?? null })
+          .pipe(Effect.orElseSucceed(() => null));
+      }
+      return {
+        credentialConfigured: credential !== null,
+        accountLabel,
+        lastSyncAt: configRow?.lastSyncAt ?? null,
+        lastSyncError: configRow?.lastSyncError ?? null,
+      } satisfies TaskProviderConnectionStatus;
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError(
+          "tasks.getProviderStatus",
+          isTaskServiceError(cause) ? cause.message : "Failed to read provider status",
+          cause,
+        ),
+      ),
+    );
+
+  const runProviderSync = (input: {
+    readonly adapter: TaskProviderAdapter;
+    readonly credential: string;
+    readonly configJson: string;
+    readonly previousLastSyncAt: string | null;
   }) =>
     Effect.gen(function* () {
+      const { adapter } = input;
       const syncedAt = yield* nowIso();
       const result = yield* Effect.result(
-        fetchClickUpTasks({ token: input.token, syncConfig: input.syncConfig }),
+        adapter.fetchSyncTasks({ credential: input.credential, configJson: input.configJson }),
       );
       if (result._tag === "Failure") {
         const failure = result.failure;
-        yield* upsertSyncConfigRow({
-          syncConfig: input.syncConfig,
-          lastSyncAt: input.syncRow?.lastSyncAt ?? null,
-          lastSyncError: failure instanceof Error ? failure.message : String(failure),
+        const detail = failure instanceof Error ? failure.message : String(failure);
+        yield* upsertProviderConfigRow({
+          providerId: adapter.id,
+          configJson: input.configJson,
+          lastSyncAt: input.previousLastSyncAt,
+          lastSyncError: detail,
         });
-        yield* Effect.logWarning("ClickUp sync failed", {
-          cause: failure,
-        });
+        yield* Effect.logWarning(`${adapter.label} sync failed`, { cause: failure });
         return;
       }
 
-      for (const task of result.success) {
-        const externalTaskId = task.id == null ? null : String(task.id).trim();
-        const title = task.name?.trim() ?? "";
-        if (!externalTaskId || title.length === 0) {
-          continue;
+      for (const snapshot of result.success) {
+        if (snapshot.externalFolderId && snapshot.externalFolderName) {
+          yield* upsertFolderRow(
+            {
+              id: externalRowId(adapter.id, snapshot.externalFolderId),
+              provider: adapter.id,
+              externalFolderId: snapshot.externalFolderId,
+              name: snapshot.externalFolderName,
+            },
+            syncedAt,
+          );
         }
-        const listRef = clickUpListRef(task);
-        const folderRef = clickUpFolderRef(task);
+        let listId: string | null = null;
+        if (snapshot.externalListId) {
+          listId = externalRowId(adapter.id, snapshot.externalListId);
+          yield* upsertListRow(
+            {
+              id: listId,
+              provider: adapter.id,
+              externalListId: snapshot.externalListId,
+              folderId: snapshot.externalFolderId
+                ? externalRowId(adapter.id, snapshot.externalFolderId)
+                : null,
+              name: snapshot.externalListName ?? snapshot.externalListId,
+            },
+            syncedAt,
+          );
+        }
         const existingRows = yield* sql<{
           readonly id: string;
           readonly createdAt: string;
@@ -1336,95 +1294,91 @@ const make = Effect.gen(function* () {
             linked_thread_id AS "linkedThreadId",
             external_custom_id AS "existingCustomId"
           FROM tasks
-          WHERE source = ${"clickup"}
-            AND external_task_id = ${externalTaskId}
+          WHERE provider = ${adapter.id}
+            AND external_task_id = ${snapshot.externalTaskId}
           LIMIT 1
         `;
         const existing = existingRows[0] ?? null;
         const taskId = existing?.id ?? TaskId.make(yield* crypto.randomUUIDv4);
         yield* upsertTaskRow({
           id: taskId,
-          source: "clickup",
-          title,
-          description: pickClickUpDescription(task),
-          statusLabel: task.status?.status?.trim() || "Open",
-          statusCategory: taskStatusCategory({
-            statusType: task.status?.type ?? null,
-            statusLabel: task.status?.status ?? null,
-          }),
-          statusColor: normalizeStatusColor(task.status?.color) ?? existing?.statusColor ?? null,
+          provider: adapter.id,
+          title: snapshot.title,
+          description: snapshot.description,
+          statusLabel: snapshot.statusLabel,
+          statusCategory: snapshot.statusCategory,
+          // A provider that drops the color later should not erase the one
+          // the user already saw.
+          statusColor: snapshot.statusColor ?? existing?.statusColor ?? null,
           linkedThreadId: existing?.linkedThreadId ?? null,
-          externalTaskId,
-          externalCustomId: task.custom_id?.trim() || existing?.existingCustomId || null,
-          externalUrl: task.url?.trim() ?? null,
-          externalListId: listRef.externalListId,
-          externalListName: listRef.externalListName,
-          externalFolderId: folderRef.externalFolderId,
-          externalFolderName: folderRef.externalFolderName,
-          assigneesJson: stringifyJsonArray(clickUpAssignees(task)),
+          listId,
+          externalTaskId: snapshot.externalTaskId,
+          externalCustomId: snapshot.externalCustomId ?? existing?.existingCustomId ?? null,
+          externalUrl: snapshot.externalUrl,
+          assigneesJson: stringifyJsonArray(snapshot.assignees),
           syncedAt,
-          externalUpdatedAt: parseClickUpTimestamp(task.date_updated),
-          // The ClickUp creation timestamp is the task's real age; the sync
+          externalUpdatedAt: snapshot.externalUpdatedAt,
+          // The provider's creation timestamp is the task's real age; the sync
           // time is only a fallback for payloads that omit it.
-          createdAt: parseClickUpTimestamp(task.date_created) ?? existing?.createdAt ?? syncedAt,
+          createdAt: snapshot.externalCreatedAt ?? existing?.createdAt ?? syncedAt,
           updatedAt: syncedAt,
         });
       }
 
-      yield* upsertSyncConfigRow({
-        syncConfig: input.syncConfig,
+      yield* upsertProviderConfigRow({
+        providerId: adapter.id,
+        configJson: input.configJson,
         lastSyncAt: syncedAt,
         lastSyncError: null,
       });
-      yield* Effect.logInfo("ClickUp sync completed", {
+      yield* Effect.logInfo(`${adapter.label} sync completed`, {
         tasks: result.success.length,
       });
     });
 
-  const syncClickUpTasks: TaskService["Service"]["syncClickUpTasks"] = () =>
+  const syncProviderTasks: TaskService["Service"]["syncProviderTasks"] = (input) =>
     Effect.gen(function* () {
-      const token = yield* getClickUpToken;
-      if (!token) {
+      const adapter = registry.get(input.providerId);
+      if (!adapter) {
         return yield* taskServiceError(
-          "tasks.syncClickUpTasks",
-          "Configure a ClickUp token before syncing tasks.",
+          "tasks.syncProviderTasks",
+          `Unknown task provider: ${input.providerId}`,
         );
       }
-      let syncRow = yield* loadSyncConfigRow();
-      let syncConfig = mapSyncConfig(syncRow);
-      if (!syncConfig) {
-        // Whole-workspace default: an environment that never configured
-        // ClickUp syncs every task of the token's first workspace.
-        const workspaces = yield* fetchClickUpWorkspaces(token).pipe(
-          Effect.orElseSucceed(() => []),
+      const credential = yield* readCredential(adapter);
+      if (!credential) {
+        return yield* taskServiceError(
+          "tasks.syncProviderTasks",
+          `Configure a ${adapter.label} credential before syncing tasks.`,
         );
-        const workspace = workspaces[0];
-        if (!workspace) {
-          return yield* taskServiceError(
-            "tasks.syncClickUpTasks",
-            "No ClickUp workspaces are available for this token.",
-          );
-        }
-        syncConfig = { workspaceId: workspace.id, workspaceName: workspace.name, listIds: [] };
-        yield* upsertSyncConfigRow({
-          syncConfig,
+      }
+      let configRow = yield* loadProviderConfigRow(adapter.id);
+      let configJson = configRow?.configJson ?? null;
+      if (!configJson) {
+        configJson = yield* adapter
+          .bootstrapConfig(credential)
+          .pipe(Effect.mapError((cause) => providerFailure("tasks.syncProviderTasks", cause)));
+        yield* upsertProviderConfigRow({
+          providerId: adapter.id,
+          configJson,
           lastSyncAt: null,
           lastSyncError: null,
         });
-        syncRow = yield* loadSyncConfigRow();
+        configRow = yield* loadProviderConfigRow(adapter.id);
       }
 
-      // Sync runs in a detached fiber: ClickUp paging plus row writes take
+      // Sync runs in a detached fiber: provider paging plus row writes take
       // minutes, and holding the HTTP response open exposes it to every hop's
       // timeout. Clients poll the panel for lastSyncAt/lastSyncError instead.
       yield* Effect.forkDetach(
-        runClickUpSync({
-          token,
-          syncConfig,
-          syncRow,
+        runProviderSync({
+          adapter,
+          credential,
+          configJson,
+          previousLastSyncAt: configRow?.lastSyncAt ?? null,
         }).pipe(
           Effect.catchCause((cause) =>
-            Effect.logWarning("ClickUp sync crashed", {
+            Effect.logWarning(`${adapter.label} sync crashed`, {
               cause,
             }),
           ),
@@ -1434,8 +1388,8 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError(
-          "tasks.syncClickUpTasks",
-          isTaskServiceError(cause) ? cause.message : "Failed to start ClickUp sync",
+          "tasks.syncProviderTasks",
+          isTaskServiceError(cause) ? cause.message : "Failed to start provider sync",
           cause,
         ),
       ),
@@ -1446,16 +1400,24 @@ const make = Effect.gen(function* () {
     queryTasks,
     listLinks,
     createManualTask,
+    createList,
+    createFolder,
     updateTask,
     deleteTask,
+    deleteList,
+    deleteFolder,
     addNote,
     getTaskAttachments,
     getTaskComments,
-    setClickUpToken,
-    clearClickUpToken,
-    getClickUpStatus,
-    syncClickUpTasks,
+    setProviderCredential,
+    clearProviderCredential,
+    getProviderStatus,
+    syncProviderTasks,
   });
 });
 
-export const TaskServiceLive = Layer.effect(TaskService, make);
+// The registry rides along so consumers only need TaskServiceLive; its
+// HttpClient requirement flows up to whoever already serves the adapters.
+export const TaskServiceLive = Layer.effect(TaskService, make).pipe(
+  Layer.provideMerge(TaskProviderRegistryLive),
+);

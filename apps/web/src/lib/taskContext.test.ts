@@ -13,18 +13,18 @@ import {
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
     id: "task-1",
-    source: "clickup",
+    provider: "clickup",
     title: "Fix login redirect",
     description: "",
     statusLabel: "In Progress",
     statusCategory: "in_progress",
     statusColor: null,
     linkedThreadId: null,
+    listId: "list-1",
+    listName: "Sprint 42",
     externalTaskId: "abc123",
     externalCustomId: null,
     externalUrl: "https://app.clickup.com/t/abc123",
-    externalListId: "list-1",
-    externalListName: "Sprint 42",
     assignees: [],
     syncedAt: null,
     externalUpdatedAt: null,
@@ -75,10 +75,10 @@ describe("formatTaskAsThreadContext", () => {
   it("falls back to the raw status label for unknown categories and omits empty sections", () => {
     const markdown = formatTaskAsThreadContext(
       makeTask({
-        source: "manual",
+        provider: "manual",
         statusCategory: "unknown",
         statusLabel: "Awaiting review",
-        externalListName: null,
+        listName: null,
         externalUrl: null,
       }),
     );
@@ -136,7 +136,7 @@ describe("buildTaskBranchName", () => {
   });
 
   it("falls back to the task id when no ClickUp id exists and drops empty slugs", () => {
-    const manual = makeTask({ source: "manual", externalTaskId: null, externalCustomId: null });
+    const manual = makeTask({ provider: "manual", externalTaskId: null, externalCustomId: null });
     expect(buildTaskBranchName(manual, "hotfix")).toBe("hotfix/task-1/fix-login-redirect");
     expect(buildTaskBranchName(makeTask({ title: "???", externalCustomId: null }), "chore")).toBe(
       "chore/abc123",

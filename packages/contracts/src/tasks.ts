@@ -9,8 +9,14 @@ export type TaskId = typeof TaskId.Type;
 export const TaskNoteId = TrimmedNonEmptyString.pipe(Schema.brand("TaskNoteId"));
 export type TaskNoteId = typeof TaskNoteId.Type;
 
-export const TaskSource = Schema.Literals(["manual", "clickup"]);
-export type TaskSource = typeof TaskSource.Type;
+/**
+ * Where a task row comes from: `"manual"` for locally created tasks, or a
+ * task provider id (`"clickup"`, later `"linear"`, …) for synced copies.
+ */
+export const TaskProviderId = TrimmedNonEmptyString;
+export type TaskProviderId = typeof TaskProviderId.Type;
+
+export const MANUAL_TASK_PROVIDER = "manual";
 
 export const TaskStatusCategory = Schema.Literals([
   "open",
@@ -21,13 +27,14 @@ export const TaskStatusCategory = Schema.Literals([
 ]);
 export type TaskStatusCategory = typeof TaskStatusCategory.Type;
 
-export const ClickUpWorkspaceSummary = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  name: TrimmedNonEmptyString,
+/** A task provider registered on the server (`"clickup"` today, Linear next). */
+export const TaskProviderInfo = Schema.Struct({
+  id: TaskProviderId,
+  label: TrimmedNonEmptyString,
 });
-export type ClickUpWorkspaceSummary = typeof ClickUpWorkspaceSummary.Type;
+export type TaskProviderInfo = typeof TaskProviderInfo.Type;
 
-/** A locally stored note on a task, as opposed to ClickUp's own comments. */
+/** A locally stored note on a task, as opposed to the provider's own comments. */
 export const TaskNote = Schema.Struct({
   id: TaskNoteId,
   taskId: TaskId,
@@ -57,10 +64,10 @@ export const TaskAttachmentsResult = Schema.Struct({
 });
 export type TaskAttachmentsResult = typeof TaskAttachmentsResult.Type;
 
-/** A comment left on the task in ClickUp, fetched read-only for the detail view. */
-export const TaskClickUpComment = Schema.Struct({
+/** A comment left on the task at the provider, fetched read-only for the detail view. */
+export const TaskComment = Schema.Struct({
   id: TrimmedNonEmptyString,
-  /** ClickUp comment id this comment replies to; null for top-level comments. */
+  /** Provider comment id this comment replies to; null for top-level comments. */
   parentId: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -75,16 +82,49 @@ export const TaskClickUpComment = Schema.Struct({
   createdAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   resolved: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
-export type TaskClickUpComment = typeof TaskClickUpComment.Type;
+export type TaskComment = typeof TaskComment.Type;
 
-export const TaskClickUpCommentsResult = Schema.Struct({
-  comments: Schema.Array(TaskClickUpComment).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+export const TaskCommentsResult = Schema.Struct({
+  comments: Schema.Array(TaskComment).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
-export type TaskClickUpCommentsResult = typeof TaskClickUpCommentsResult.Type;
+export type TaskCommentsResult = typeof TaskCommentsResult.Type;
+
+/**
+ * A folder is the top grouping level (ClickUp workspace folders; local
+ * folders later). Provider-backed folders carry the provider's external id;
+ * local ones have none.
+ */
+export const TaskFolder = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  provider: TaskProviderId,
+  externalFolderId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  name: TrimmedNonEmptyString,
+});
+export type TaskFolder = typeof TaskFolder.Type;
+
+/**
+ * A list groups tasks and sits in a folder (or nowhere). Both manual and
+ * provider-backed lists live in the same registry; synced tasks resolve to
+ * their list by (provider, external id).
+ */
+export const TaskList = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  provider: TaskProviderId,
+  externalListId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  folderId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  name: TrimmedNonEmptyString,
+});
+export type TaskList = typeof TaskList.Type;
 
 export const Task = Schema.Struct({
   id: TaskId,
-  source: TaskSource,
+  provider: TaskProviderId,
   title: TrimmedNonEmptyString,
   description: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   statusLabel: TrimmedNonEmptyString,
@@ -93,20 +133,22 @@ export const Task = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   linkedThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** The list this task sits in; local ids because lists are first-class. */
+  listId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  /** The list's name, resolved from the registry for display and context blocks. */
+  listName: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   externalTaskId: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  /** ClickUp's human-facing custom ID (e.g. `PR-1685`), when the workspace uses them. */
+  /** The provider's human-facing custom ID (e.g. `PR-1685`), when it uses them. */
   externalCustomId: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   externalUrl: Schema.NullOr(TrimmedNonEmptyString).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-  externalListId: Schema.NullOr(TrimmedNonEmptyString).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-  externalListName: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   assignees: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -122,25 +164,18 @@ export const Task = Schema.Struct({
 });
 export type Task = typeof Task.Type;
 
-export const TaskSyncConfig = Schema.Struct({
-  workspaceId: TrimmedNonEmptyString,
-  workspaceName: Schema.optional(TrimmedNonEmptyString),
-  listIds: Schema.Array(TrimmedNonEmptyString).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+/** A folder row in the browse tree, with the task count across its lists. */
+export const TaskFolderFacet = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  provider: TaskProviderId,
+  name: TrimmedNonEmptyString,
+  count: Schema.Number,
 });
-export type TaskSyncConfig = typeof TaskSyncConfig.Type;
-
-export const TaskClickUpState = Schema.Struct({
-  tokenConfigured: Schema.Boolean,
-  syncConfig: Schema.NullOr(TaskSyncConfig).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  lastSyncAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  lastSyncError: Schema.NullOr(TrimmedNonEmptyString).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-});
-export type TaskClickUpState = typeof TaskClickUpState.Type;
+export type TaskFolderFacet = typeof TaskFolderFacet.Type;
 
 export const TaskListFacet = Schema.Struct({
   id: TrimmedNonEmptyString,
+  provider: TaskProviderId,
   name: TrimmedNonEmptyString,
   count: Schema.Number,
   folderId: Schema.NullOr(TrimmedNonEmptyString).pipe(
@@ -163,7 +198,7 @@ export const TaskLinkSummary = Schema.Struct({
   threadId: ThreadId,
   title: TrimmedNonEmptyString,
   statusCategory: TaskStatusCategory,
-  source: TaskSource,
+  provider: TaskProviderId,
 });
 export type TaskLinkSummary = typeof TaskLinkSummary.Type;
 
@@ -173,19 +208,37 @@ export const TaskLinksResult = Schema.Struct({
 export type TaskLinksResult = typeof TaskLinksResult.Type;
 
 export const TaskFacets = Schema.Struct({
+  folders: Schema.Array(TaskFolderFacet).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   lists: Schema.Array(TaskListFacet).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   statuses: Schema.Array(TaskValueFacet).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   assignees: Schema.Array(TaskValueFacet).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type TaskFacets = typeof TaskFacets.Type;
 
+/** Per-provider connection + sync state shown on the panel. */
+export const TaskProviderState = Schema.Struct({
+  providerId: TaskProviderId,
+  label: TrimmedNonEmptyString,
+  credentialConfigured: Schema.Boolean,
+  /** Account-level label (ClickUp workspace name); null until known. */
+  accountLabel: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  lastSyncAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  lastSyncError: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+});
+export type TaskProviderState = typeof TaskProviderState.Type;
+
 export const TaskPanel = Schema.Struct({
-  clickup: TaskClickUpState,
+  providers: Schema.Array(TaskProviderState).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   facets: TaskFacets,
 });
 export type TaskPanel = typeof TaskPanel.Type;
 
 export const TaskQueryFilter = Schema.Struct({
+  // List and folder ids are local registry ids (task_lists / task_folders).
   listIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   folderIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   taskIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
@@ -213,8 +266,21 @@ export type TaskQueryResult = typeof TaskQueryResult.Type;
 export const CreateManualTaskInput = Schema.Struct({
   title: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedString),
+  listId: Schema.optional(TrimmedNonEmptyString),
 });
 export type CreateManualTaskInput = typeof CreateManualTaskInput.Type;
+
+export const CreateTaskListInput = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  /** Manual lists can nest under a manual folder; omit for a top-level list. */
+  folderId: Schema.optional(TrimmedNonEmptyString),
+});
+export type CreateTaskListInput = typeof CreateTaskListInput.Type;
+
+export const CreateTaskFolderInput = Schema.Struct({
+  name: TrimmedNonEmptyString,
+});
+export type CreateTaskFolderInput = typeof CreateTaskFolderInput.Type;
 
 export const UpdateTaskInput = Schema.Struct({
   taskId: TaskId,
@@ -231,21 +297,36 @@ export const DeleteTaskInput = Schema.Struct({
 });
 export type DeleteTaskInput = typeof DeleteTaskInput.Type;
 
+export const DeleteTaskListInput = Schema.Struct({
+  listId: TrimmedNonEmptyString,
+});
+export type DeleteTaskListInput = typeof DeleteTaskListInput.Type;
+
+export const DeleteTaskFolderInput = Schema.Struct({
+  folderId: TrimmedNonEmptyString,
+});
+export type DeleteTaskFolderInput = typeof DeleteTaskFolderInput.Type;
+
 export const AddTaskNoteInput = Schema.Struct({
   taskId: TaskId,
   body: TrimmedNonEmptyString,
 });
 export type AddTaskNoteInput = typeof AddTaskNoteInput.Type;
 
-export const SetClickUpTokenInput = Schema.Struct({
+export const ProviderIdParams = Schema.Struct({
+  providerId: TaskProviderId,
+});
+export type ProviderIdParams = typeof ProviderIdParams.Type;
+
+export const SetProviderCredentialInput = Schema.Struct({
   token: TrimmedNonEmptyString,
 });
-export type SetClickUpTokenInput = typeof SetClickUpTokenInput.Type;
+export type SetProviderCredentialInput = typeof SetProviderCredentialInput.Type;
 
-export const ClickUpConnectionStatus = Schema.Struct({
-  tokenConfigured: Schema.Boolean,
-  /** Workspace the sync is bound to, or the token's first workspace before the first sync. */
-  workspaceName: Schema.NullOr(TrimmedNonEmptyString).pipe(
+export const TaskProviderConnectionStatus = Schema.Struct({
+  credentialConfigured: Schema.Boolean,
+  /** Account the sync is bound to, or the credential's account before the first sync. */
+  accountLabel: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   lastSyncAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -253,4 +334,4 @@ export const ClickUpConnectionStatus = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
 });
-export type ClickUpConnectionStatus = typeof ClickUpConnectionStatus.Type;
+export type TaskProviderConnectionStatus = typeof TaskProviderConnectionStatus.Type;

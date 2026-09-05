@@ -12,9 +12,11 @@ it.layer(NodeServices.layer)("048 TaskNotesHealColumn", (it) => {
       const sql = yield* SqlClient.SqlClient;
 
       // Reproduce the half-applied state: 047 recorded, but its column rename
-      // never landed, so notes are still keyed by comment_id.
+      // never landed, so notes are still keyed by comment_id. The journal is
+      // rewound past both heal-relevant migrations so the migrator re-runs
+      // them (049 is idempotent on an already-migrated database).
       yield* sql`ALTER TABLE task_notes RENAME COLUMN note_id TO comment_id`;
-      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 48`;
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 48`;
       yield* sql`
         INSERT INTO task_notes (comment_id, task_id, body, created_at, updated_at)
         VALUES ('n1', 't1', 'survives the heal', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')

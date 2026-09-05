@@ -10,6 +10,7 @@ This is a living glossary for AVA Code. It explains what common terms mean in th
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
+- [Task providers](#task-providers)
 - [Checkpointing](#checkpointing)
 
 ## Concepts
@@ -140,6 +141,22 @@ The patch difference between two checkpoints. Query logic lives in [CheckpointDi
 
 The file patch and changed-file summary for one turn. It is usually computed in [CheckpointDiffQuery.ts][20], represented in [the contracts][1], and recorded into thread state by [projector.ts][4].
 
+### Task providers
+
+Tasks are stored locally and optionally mirrored from external trackers. The store, contracts, and panel are provider-agnostic; only the adapter knows the vendor's API.
+
+#### Task provider
+
+A service that can sync task copies into the local store, e.g. ClickUp today, Linear later. The adapter contract is [providers/types.ts][25]; the ClickUp adapter is [providers/clickup.ts][26]. Credentials live in the server secret store; per-provider sync state lives in `task_provider_configs`.
+
+#### Task list
+
+A first-class grouping of tasks, optionally inside a folder. Both synced (provider-backed, keyed by provider + external id) and locally created lists live in the `task_lists` registry, and tasks point at them by local id. Folders follow the same pattern in `task_folders`.
+
+#### Manual task
+
+A task created locally (`provider: "manual"`), optionally assigned to any list. Manual tasks can be edited and deleted freely; synced copies are refreshed by their provider's sync.
+
 ## Practical Shortcuts
 
 - If you see `requested`, think "intent recorded".
@@ -178,4 +195,6 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [21]: ../../apps/server/src/persistence/Services/ProjectionCheckpoints.ts
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
+[25]: ../../apps/server/src/tasks/providers/types.ts
+[26]: ../../apps/server/src/tasks/providers/clickup.ts
 [24]: ./overview.md

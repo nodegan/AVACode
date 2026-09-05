@@ -1,17 +1,14 @@
-import type { Task, TaskClickUpComment } from "@t3tools/contracts";
+import type { Task, TaskComment } from "@t3tools/contracts";
 import { formatTaskContext } from "@t3tools/shared/taskContext";
 
 /**
  * Markdown body describing the task, shaped identically to the web client's
  * composer-attached blocks (both render through the shared task-context
- * formatter) so the model sees the same block either way. ClickUp comments
+ * formatter) so the model sees the same block either way. Provider comments
  * are passed in by the caller when they are available.
  */
-export function formatTaskAsTurnContext(
-  task: Task,
-  clickUpComments?: ReadonlyArray<TaskClickUpComment>,
-): string {
-  return formatTaskContext(task, clickUpComments === undefined ? undefined : { clickUpComments });
+export function formatTaskAsTurnContext(task: Task, comments?: ReadonlyArray<TaskComment>): string {
+  return formatTaskContext(task, comments === undefined ? undefined : { comments });
 }
 
 /**
@@ -22,7 +19,7 @@ export function formatTaskAsTurnContext(
  */
 export function buildLinkedTaskContextBlock(
   task: Task,
-  clickUpComments?: ReadonlyArray<TaskClickUpComment>,
+  comments?: ReadonlyArray<TaskComment>,
 ): string {
-  return `<task_context>\nThis thread is linked to the following task:\n\n${formatTaskAsTurnContext(task, clickUpComments)}\n</task_context>`;
+  return `<task_context>\nThis thread is linked to the following task:\n\n${formatTaskAsTurnContext(task, comments)}\n</task_context>`;
 }

@@ -9,7 +9,7 @@ import {
   pickClickUpDescription,
   taskStatusCategory,
   type ClickUpTaskResponse,
-} from "../src/tasks/TaskService.ts";
+} from "../src/tasks/providers/clickup.ts";
 
 describe("clickUpFolderRef", () => {
   it("extracts the folder id and name", () => {

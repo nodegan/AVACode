@@ -1,25 +1,31 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { Task, TaskClickUpComment, TaskNote } from "@t3tools/contracts";
-import { TaskId, ThreadId } from "@t3tools/contracts";
+import {
+  TaskId,
+  TaskNoteId,
+  ThreadId,
+  type Task,
+  type TaskComment,
+  type TaskNote,
+} from "@t3tools/contracts";
 
 import { buildLinkedTaskContextBlock, formatTaskAsTurnContext } from "./TaskTurnContext.ts";
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
     id: TaskId.make("task-1"),
-    source: "manual",
+    provider: "manual",
     title: "Fix login redirect",
     description: "Users land on the home screen after SSO.",
     statusLabel: "In Progress",
     statusCategory: "in_progress",
     statusColor: null,
     linkedThreadId: ThreadId.make("thread-1"),
+    listId: null,
+    listName: null,
     externalTaskId: null,
     externalCustomId: null,
     externalUrl: null,
-    externalListId: null,
-    externalListName: null,
     assignees: [],
     syncedAt: null,
     externalUpdatedAt: null,
@@ -30,7 +36,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
-const makeComment = (overrides: Partial<TaskClickUpComment>): TaskClickUpComment => ({
+const makeComment = (overrides: Partial<TaskComment>): TaskComment => ({
   id: "c-1",
   parentId: null,
   body: "Root comment",
@@ -43,8 +49,8 @@ const makeComment = (overrides: Partial<TaskClickUpComment>): TaskClickUpComment
 });
 
 const makeNote = (overrides: Partial<TaskNote>): TaskNote => ({
-  id: "n-1",
-  taskId: "task-1",
+  id: TaskNoteId.make("n-1"),
+  taskId: TaskId.make("task-1"),
   body: "Repro is on staging.",
   createdAt: "2026-09-02T00:00:00.000Z",
   updatedAt: "2026-09-02T00:00:00.000Z",
@@ -68,7 +74,7 @@ describe("TaskTurnContext", () => {
   it("includes list, assignees, and source url when present", () => {
     const markdown = formatTaskAsTurnContext(
       makeTask({
-        externalListName: "Sprint Backlog",
+        listName: "Sprint Backlog",
         assignees: ["Ana"],
         externalUrl: "https://app.clickup.com/t/9hz",
       }),
@@ -94,7 +100,7 @@ describe("TaskTurnContext", () => {
     ]);
     expect(markdown).toContain(
       [
-        "### ClickUp comments",
+        "### Provider comments",
         "- **Ana** (2026-09-01): Root comment",
         "  - **Bo** (2026-09-01): A reply",
       ].join("\n"),
@@ -104,6 +110,6 @@ describe("TaskTurnContext", () => {
   it("appends notes and omits the comments section without them", () => {
     const markdown = formatTaskAsTurnContext(makeTask({ notes: [makeNote({})] }));
     expect(markdown).toContain("### Notes\n- (2026-09-02): Repro is on staging.");
-    expect(markdown).not.toContain("### ClickUp comments");
+    expect(markdown).not.toContain("### Provider comments");
   });
 });
