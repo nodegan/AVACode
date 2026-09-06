@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { TaskId, TaskPanel, ThreadId } from "@t3tools/contracts";
+import { TaskId, TaskPanel, TaskStatusId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -781,6 +781,139 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
         panel.facets.lists.map((facet) => facet.name),
         ["Alpha"],
       );
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("listStatuses seeds built-in statuses in registry order", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskService;
+      const result = yield* service.listStatuses();
+      assert.deepStrictEqual(
+        result.statuses.map((status) => `${status.label}:${status.category}:${status.taskCount}`),
+        ["To do:open:0", "In progress:in_progress:0", "Blocked:blocked:0", "Done:done:0"],
+      );
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("manual tasks attach to the picked status by default", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskService;
+      const statuses = yield* service.listStatuses();
+      const first = statuses.statuses[0];
+      const done = statuses.statuses.find((status) => status.category === "done");
+      assert.ok(first);
+      assert.ok(done);
+
+      const byDefault = yield* service.createManualTask({ title: "Default status" });
+      assert.strictEqual(byDefault.statusLabel, first.label);
+      assert.strictEqual(byDefault.statusCategory, first.category);
+
+      const picked = yield* service.createManualTask({
+        title: "Already done",
+        statusId: done.id,
+      });
+      assert.strictEqual(picked.statusLabel, done.label);
+      assert.strictEqual(picked.statusCategory, "done");
+
+      const unknown = yield* Effect.result(
+        service.createManualTask({ title: "Lost", statusId: TaskStatusId.make("status:missing") }),
+      );
+      assert.strictEqual(unknown._tag, "Failure");
+
+      const refreshed = yield* service.listStatuses();
+      assert.deepStrictEqual(
+        refreshed.statuses.map((status) => `${status.label}:${status.taskCount}`),
+        ["To do:1", "In progress:0", "Blocked:0", "Done:1"],
+      );
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("createStatus appends to the registry and updateStatus cascades to tasks", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskService;
+      const created = yield* service.createStatus({
+        label: "In review",
+        category: "in_progress",
+        color: "#0284c7",
+      });
+      assert.strictEqual(created.label, "In review");
+      assert.strictEqual(created.taskCount, 0);
+
+      const task = yield* service.createManualTask({ title: "Under review", statusId: created.id });
+
+      const renamed = yield* service.updateStatus({
+        statusId: created.id,
+        label: "In review round 2",
+        color: null,
+      });
+      assert.strictEqual(renamed.label, "In review round 2");
+      assert.strictEqual(renamed.color, null);
+
+      const afterRename = yield* service.queryTasks({ filter: { taskIds: [task.id] } });
+      const renamedTask = afterRename.tasks[0];
+      assert.ok(renamedTask);
+      assert.strictEqual(renamedTask.statusLabel, "In review round 2");
+      assert.strictEqual(renamedTask.statusColor, null);
+
+      const recategorized = yield* service.updateStatus({
+        statusId: created.id,
+        category: "blocked",
+      });
+      assert.strictEqual(recategorized.category, "blocked");
+      const afterRecategorize = yield* service.queryTasks({ filter: { taskIds: [task.id] } });
+      assert.strictEqual(afterRecategorize.tasks[0]?.statusCategory, "blocked");
+
+      const unknown = yield* Effect.result(
+        service.updateStatus({ statusId: TaskStatusId.make("status:missing") }),
+      );
+      assert.strictEqual(unknown._tag, "Failure");
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("deleting a status reassigns its tasks to a surviving status", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskService;
+      const statuses = yield* service.listStatuses();
+      const todo = statuses.statuses.find((status) => status.label === "To do");
+      const done = statuses.statuses.find((status) => status.category === "done");
+      assert.ok(todo);
+      assert.ok(done);
+
+      const task = yield* service.createManualTask({ title: "Doomed status" });
+
+      // Attached tasks require a reassignment target.
+      const blocked = yield* Effect.result(service.deleteStatus({ statusId: todo.id }));
+      assert.strictEqual(blocked._tag, "Failure");
+
+      yield* service.deleteStatus({ statusId: todo.id, reassignToStatusId: done.id });
+
+      const after = yield* service.queryTasks({ filter: { taskIds: [task.id] } });
+      const moved = after.tasks[0];
+      assert.ok(moved);
+      assert.strictEqual(moved.statusLabel, "Done");
+      assert.strictEqual(moved.statusCategory, "done");
+
+      const registry = yield* service.listStatuses();
+      assert.deepStrictEqual(
+        registry.statuses.map((status) => status.label),
+        ["In progress", "Blocked", "Done"],
+      );
+      assert.deepStrictEqual(
+        registry.statuses.find((status) => status.label === "Done")?.taskCount,
+        1,
+      );
+
+      // A status without tasks deletes without a reassignment target.
+      const spare = yield* service.createStatus({ label: "Spare", category: "open" });
+      yield* service.deleteStatus({ statusId: spare.id });
+      const final = yield* service.listStatuses();
+      assert.deepStrictEqual(
+        final.statuses.map((status) => status.label),
+        ["In progress", "Blocked", "Done"],
+      );
+
+      const unknown = yield* Effect.result(service.deleteStatus({ statusId: spare.id }));
+      assert.strictEqual(unknown._tag, "Failure");
     }).pipe(Effect.provide(TestLayers)),
   );
 });

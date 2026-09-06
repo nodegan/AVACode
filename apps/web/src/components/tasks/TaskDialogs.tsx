@@ -1,4 +1,4 @@
-import type { TaskListFacet } from "@t3tools/contracts";
+import type { TaskListFacet, TaskStatus } from "@t3tools/contracts";
 import { Loader2Icon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -84,21 +84,32 @@ export function CreateTaskDialog(props: {
   onOpenChange: (open: boolean) => void;
   groups: ReadonlyArray<TaskListOptionGroup>;
   defaultListId: string | null;
+  /** The settings-managed statuses a new task can start as. */
+  statuses: ReadonlyArray<TaskStatus>;
   busy: boolean;
-  onSubmit: (input: { title: string; description?: string; listId?: string }) => Promise<boolean>;
+  onSubmit: (input: {
+    title: string;
+    description?: string;
+    listId?: string;
+    statusId?: string;
+  }) => Promise<boolean>;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [listId, setListId] = useState<string>(NO_LIST);
+  const [statusId, setStatusId] = useState<string>("");
   const submittingRef = useRef(false);
+
+  const firstStatusId = props.statuses[0]?.id ?? "";
 
   useEffect(() => {
     if (props.open) {
       setTitle("");
       setDescription("");
       setListId(props.defaultListId ?? NO_LIST);
+      setStatusId(firstStatusId);
     }
-  }, [props.open, props.defaultListId]);
+  }, [props.open, props.defaultListId, firstStatusId]);
 
   const submit = async () => {
     if (submittingRef.current) return;
@@ -110,6 +121,7 @@ export function CreateTaskDialog(props: {
         title: trimmed,
         ...(description.trim().length > 0 ? { description: description.trim() } : {}),
         ...(listId !== NO_LIST ? { listId } : {}),
+        ...(statusId !== "" ? { statusId } : {}),
       });
       if (created) props.onOpenChange(false);
     } finally {
@@ -181,6 +193,28 @@ export function CreateTaskDialog(props: {
           </SelectContent>
         </Select>
       </div>
+      {props.statuses.length > 0 ? (
+        <div className="space-y-1.5">
+          <Label htmlFor="create-task-status">Status</Label>
+          <Select
+            value={statusId}
+            onValueChange={(value) => typeof value === "string" && setStatusId(value)}
+          >
+            <SelectTrigger id="create-task-status" aria-label="Starting status">
+              <SelectValue>
+                {props.statuses.find((status) => status.id === statusId)?.label ?? "Default"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              {props.statuses.map((status) => (
+                <SelectItem key={status.id} value={status.id}>
+                  {status.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
     </DialogChrome>
   );
 }

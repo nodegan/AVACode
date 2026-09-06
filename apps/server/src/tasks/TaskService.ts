@@ -3,9 +3,11 @@ import {
   CreateManualTaskInput,
   CreateTaskFolderInput,
   CreateTaskListInput,
+  CreateTaskStatusInput,
   DeleteTaskFolderInput,
   DeleteTaskInput,
   DeleteTaskListInput,
+  DeleteTaskStatusInput,
   MANUAL_TASK_PROVIDER,
   type Task,
   type TaskAttachmentsResult,
@@ -24,10 +26,14 @@ import {
   type TaskProviderConnectionStatus,
   type TaskProviderId,
   type TaskProviderState,
+  type TaskStatus,
   type TaskStatusCategory,
+  type TaskStatusesResult,
+  TaskStatus as TaskStatusSchema,
   QueryTasksInput,
   ThreadId,
   UpdateTaskInput,
+  UpdateTaskStatusInput,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -60,6 +66,7 @@ interface TaskRow {
   readonly statusLabel: string;
   readonly statusCategory: TaskStatusCategory;
   readonly statusColor: string | null;
+  readonly statusId: string | null;
   readonly linkedThreadId: string | null;
   readonly listId: string | null;
   readonly listName: string | null;
@@ -97,6 +104,15 @@ interface TaskListRow {
   readonly externalListId: string | null;
   readonly folderId: string | null;
   readonly name: string;
+}
+
+interface TaskStatusRow {
+  readonly id: string;
+  readonly label: string;
+  readonly category: TaskStatusCategory;
+  readonly color: string | null;
+  readonly sortOrder: number;
+  readonly taskCount: number;
 }
 
 interface ProviderConfigRow {
@@ -172,6 +188,7 @@ const decodeNoteRow = Schema.decodeSync(TaskNoteSchema);
 const decodeTaskRow = Schema.decodeSync(TaskSchema);
 const decodeFacets = Schema.decodeSync(TaskFacets);
 const decodeTaskListRow = Schema.decodeSync(TaskList);
+const decodeTaskStatusRow = Schema.decodeSync(TaskStatusSchema);
 
 function mapNoteRow(row: TaskNoteRow): TaskNote {
   return decodeNoteRow({
@@ -224,6 +241,16 @@ export class TaskService extends Context.Service<
     readonly createFolder: (
       input: CreateTaskFolderInput,
     ) => Effect.Effect<TaskFolder, TaskServiceFailure>;
+    readonly listStatuses: () => Effect.Effect<TaskStatusesResult, TaskServiceFailure>;
+    readonly createStatus: (
+      input: CreateTaskStatusInput,
+    ) => Effect.Effect<TaskStatus, TaskServiceFailure>;
+    readonly updateStatus: (
+      input: UpdateTaskStatusInput,
+    ) => Effect.Effect<TaskStatus, TaskServiceFailure>;
+    readonly deleteStatus: (
+      input: DeleteTaskStatusInput,
+    ) => Effect.Effect<void, TaskServiceFailure>;
     readonly updateTask: (input: UpdateTaskInput) => Effect.Effect<Task, TaskServiceFailure>;
     readonly deleteTask: (input: DeleteTaskInput) => Effect.Effect<void, TaskServiceFailure>;
     readonly deleteList: (input: DeleteTaskListInput) => Effect.Effect<void, TaskServiceFailure>;
@@ -394,6 +421,7 @@ const make = Effect.gen(function* () {
       tasks.status_label AS "statusLabel",
       tasks.status_category AS "statusCategory",
       tasks.status_color AS "statusColor",
+      tasks.status_id AS "statusId",
       tasks.linked_thread_id AS "linkedThreadId",
       tasks.list_id AS "listId",
       task_lists.name AS "listName",
@@ -605,6 +633,7 @@ const make = Effect.gen(function* () {
         status_label,
         status_category,
         status_color,
+        status_id,
         linked_thread_id,
         list_id,
         external_task_id,
@@ -624,6 +653,7 @@ const make = Effect.gen(function* () {
         ${row.statusLabel},
         ${row.statusCategory},
         ${row.statusColor},
+        ${row.statusId},
         ${row.linkedThreadId},
         ${row.listId},
         ${row.externalTaskId},
@@ -643,6 +673,7 @@ const make = Effect.gen(function* () {
         status_label = excluded.status_label,
         status_category = excluded.status_category,
         status_color = excluded.status_color,
+        status_id = excluded.status_id,
         linked_thread_id = excluded.linked_thread_id,
         list_id = excluded.list_id,
         external_task_id = excluded.external_task_id,
@@ -774,6 +805,39 @@ const make = Effect.gen(function* () {
       return row;
     });
 
+  /** New manual tasks land on the picked status, or the first by default. */
+  const resolveStatusForCreate = (statusId: string | undefined) =>
+    Effect.gen(function* () {
+      if (statusId !== undefined) {
+        return yield* loadStatusRowById(statusId);
+      }
+      const rows = yield* sql<TaskStatusRow>`
+        SELECT
+          task_statuses.status_id AS "id",
+          task_statuses.label,
+          task_statuses.category,
+          task_statuses.color,
+          task_statuses.sort_order AS "sortOrder",
+          0 AS "taskCount"
+        FROM task_statuses
+        ORDER BY task_statuses.sort_order ASC, task_statuses.label ASC
+        LIMIT 1
+      `;
+      const row = rows[0];
+      if (!row) {
+        // The registry seeds itself on migration; this only guards a wiped table.
+        return {
+          id: null,
+          label: "To do",
+          category: "open" as TaskStatusCategory,
+          color: null,
+          sortOrder: 0,
+          taskCount: 0,
+        };
+      }
+      return row;
+    });
+
   const createManualTask: TaskService["Service"]["createManualTask"] = (input) =>
     Effect.gen(function* () {
       const createdAt = yield* nowIso();
@@ -781,14 +845,16 @@ const make = Effect.gen(function* () {
       if (input.listId) {
         yield* requireListAdapter(input.listId);
       }
+      const status = yield* resolveStatusForCreate(input.statusId);
       const row: TaskUpsertRow = {
         id,
         provider: MANUAL_TASK_PROVIDER,
         title: input.title,
         description: input.description?.trim() ?? "",
-        statusLabel: "To do",
-        statusCategory: "open",
-        statusColor: null,
+        statusLabel: status.label,
+        statusCategory: status.category,
+        statusColor: status.color,
+        statusId: status.id,
         linkedThreadId: null,
         listId: input.listId ?? null,
         externalTaskId: null,
@@ -913,6 +979,7 @@ const make = Effect.gen(function* () {
         statusLabel: input.statusLabel ?? current.statusLabel,
         statusCategory: input.statusCategory ?? current.statusCategory,
         statusColor: current.statusColor,
+        statusId: current.statusId,
         linkedThreadId:
           input.linkedThreadId !== undefined ? input.linkedThreadId : current.linkedThreadId,
         listId: current.listId,
@@ -1039,6 +1106,174 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError("tasks.deleteFolder", "Failed to delete folder", cause),
+      ),
+    );
+
+  const loadStatusRowById = (statusId: string) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<TaskStatusRow>`
+        SELECT
+          task_statuses.status_id AS "id",
+          task_statuses.label,
+          task_statuses.category,
+          task_statuses.color,
+          task_statuses.sort_order AS "sortOrder",
+          COUNT(tasks.task_id) AS "taskCount"
+        FROM task_statuses
+        LEFT JOIN tasks ON tasks.status_id = task_statuses.status_id
+        WHERE task_statuses.status_id = ${statusId}
+        GROUP BY task_statuses.status_id
+      `;
+      const row = rows[0];
+      if (!row) {
+        return yield* taskServiceError("tasks.loadStatus", `Unknown task status: ${statusId}`);
+      }
+      return row;
+    });
+
+  const mapStatusRow = (row: TaskStatusRow): TaskStatus =>
+    decodeTaskStatusRow({
+      id: row.id,
+      label: row.label,
+      category: row.category,
+      color: row.color,
+      sortOrder: row.sortOrder,
+      taskCount: row.taskCount,
+    });
+
+  const listStatuses: TaskService["Service"]["listStatuses"] = () =>
+    Effect.gen(function* () {
+      const rows = yield* sql<TaskStatusRow>`
+        SELECT
+          task_statuses.status_id AS "id",
+          task_statuses.label,
+          task_statuses.category,
+          task_statuses.color,
+          task_statuses.sort_order AS "sortOrder",
+          COUNT(tasks.task_id) AS "taskCount"
+        FROM task_statuses
+        LEFT JOIN tasks ON tasks.status_id = task_statuses.status_id
+        GROUP BY task_statuses.status_id
+        ORDER BY task_statuses.sort_order ASC, task_statuses.label ASC
+      `;
+      return { statuses: rows.map(mapStatusRow) } satisfies TaskStatusesResult;
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.listStatuses", "Failed to load task statuses", cause),
+      ),
+    );
+
+  const createStatus: TaskService["Service"]["createStatus"] = (input) =>
+    Effect.gen(function* () {
+      const timestamp = yield* nowIso();
+      const id = yield* crypto.randomUUIDv4;
+      const maxRows = yield* sql<{ readonly maxOrder: number | null }>`
+        SELECT MAX(sort_order) AS "maxOrder" FROM task_statuses
+      `;
+      const sortOrder = (maxRows[0]?.maxOrder ?? -1) + 1;
+      yield* sql`
+        INSERT INTO task_statuses (
+          status_id,
+          label,
+          category,
+          color,
+          sort_order,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${id},
+          ${input.label},
+          ${input.category},
+          ${input.color?.trim() || null},
+          ${sortOrder},
+          ${timestamp},
+          ${timestamp}
+        )
+      `;
+      return yield* loadStatusRowById(id).pipe(Effect.map(mapStatusRow));
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.createStatus", "Failed to create task status", cause),
+      ),
+    );
+
+  /**
+   * Status fields are copied onto attached tasks for display, so edits cascade
+   * to those copies. The cascade skips updated_at: reordering the task list
+   * because a status was recolored would be surprising.
+   */
+  const updateStatus: TaskService["Service"]["updateStatus"] = (input) =>
+    Effect.gen(function* () {
+      const current = yield* loadStatusRowById(input.statusId);
+      const label = input.label ?? current.label;
+      const category = input.category ?? current.category;
+      const color = input.color !== undefined ? input.color?.trim() || null : current.color;
+      const timestamp = yield* nowIso();
+      yield* sql`
+        UPDATE task_statuses
+        SET
+          label = ${label},
+          category = ${category},
+          color = ${color},
+          updated_at = ${timestamp}
+        WHERE status_id = ${input.statusId}
+      `;
+      if (label !== current.label || category !== current.category || color !== current.color) {
+        yield* sql`
+          UPDATE tasks
+          SET
+            status_label = ${label},
+            status_category = ${category},
+            status_color = ${color}
+          WHERE status_id = ${input.statusId}
+        `;
+      }
+      return yield* loadStatusRowById(input.statusId).pipe(Effect.map(mapStatusRow));
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.updateStatus", "Failed to update task status", cause),
+      ),
+    );
+
+  /**
+   * Deleting a status with tasks attached requires a surviving status to move
+   * them to; the caller picks it so the tasks land somewhere intentional.
+   */
+  const deleteStatus: TaskService["Service"]["deleteStatus"] = (input) =>
+    Effect.gen(function* () {
+      const current = yield* loadStatusRowById(input.statusId);
+      if (current.taskCount > 0) {
+        const reassignToStatusId = input.reassignToStatusId;
+        if (reassignToStatusId === undefined) {
+          return yield* taskServiceError(
+            "tasks.deleteStatus",
+            `${current.taskCount} ${current.taskCount === 1 ? "task uses" : "tasks use"} this status. Pick another status to move them to.`,
+          );
+        }
+        if (reassignToStatusId === input.statusId) {
+          return yield* taskServiceError(
+            "tasks.deleteStatus",
+            "Pick a status other than the one being deleted.",
+          );
+        }
+        const target = yield* loadStatusRowById(reassignToStatusId);
+        yield* sql`
+          UPDATE tasks
+          SET
+            status_id = ${target.id},
+            status_label = ${target.label},
+            status_category = ${target.category},
+            status_color = ${target.color}
+          WHERE status_id = ${input.statusId}
+        `;
+      }
+      yield* sql`
+        DELETE FROM task_statuses WHERE status_id = ${input.statusId}
+      `;
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError("tasks.deleteStatus", "Failed to delete task status", cause),
       ),
     );
 
@@ -1297,6 +1532,7 @@ const make = Effect.gen(function* () {
           readonly id: string;
           readonly createdAt: string;
           readonly statusColor: string | null;
+          readonly statusId: string | null;
           readonly linkedThreadId: ThreadId | null;
           readonly existingCustomId: string | null;
         }>`
@@ -1304,6 +1540,7 @@ const make = Effect.gen(function* () {
             task_id AS "id",
             created_at AS "createdAt",
             status_color AS "statusColor",
+            status_id AS "statusId",
             linked_thread_id AS "linkedThreadId",
             external_custom_id AS "existingCustomId"
           FROM tasks
@@ -1323,6 +1560,9 @@ const make = Effect.gen(function* () {
           // A provider that drops the color later should not erase the one
           // the user already saw.
           statusColor: snapshot.statusColor ?? existing?.statusColor ?? null,
+          // Registry statuses are a manual-task concept; synced rows keep
+          // whatever attachment they had rather than regressing to null.
+          statusId: existing?.statusId ?? null,
           linkedThreadId: existing?.linkedThreadId ?? null,
           listId,
           externalTaskId: snapshot.externalTaskId,
@@ -1415,6 +1655,10 @@ const make = Effect.gen(function* () {
     createManualTask,
     createList,
     createFolder,
+    listStatuses,
+    createStatus,
+    updateStatus,
+    deleteStatus,
     updateTask,
     deleteTask,
     deleteList,

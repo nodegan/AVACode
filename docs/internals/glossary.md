@@ -157,6 +157,10 @@ A first-class grouping of tasks, optionally inside a folder. Both synced (provid
 
 A task created locally (`provider: "manual"`), optionally assigned to any list. Manual tasks can be edited and deleted freely; synced copies are refreshed by their provider's sync.
 
+#### Task status
+
+A user-managed status in the registry backed by the `task_statuses` table, edited from the Tasks settings section (add, edit, delete). Manual tasks attach to a status by id and copy its label, category, and color for display, so status edits cascade to those copies. Deleting a status that still has tasks requires a surviving status to reassign them to; the caller picks it. Synced tasks keep their provider's own status fields. See [TaskService.ts][27].
+
 ## Practical Shortcuts
 
 - If you see `requested`, think "intent recorded".
@@ -197,4 +201,5 @@ A task created locally (`provider: "manual"`), optionally assigned to any list. 
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [25]: ../../apps/server/src/tasks/providers/types.ts
 [26]: ../../apps/server/src/tasks/providers/clickup.ts
+[27]: ../../apps/server/src/tasks/TaskService.ts
 [24]: ./overview.md

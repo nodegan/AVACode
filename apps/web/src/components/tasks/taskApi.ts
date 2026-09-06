@@ -5,18 +5,21 @@ import {
 import { type PreparedConnection } from "@t3tools/client-runtime/connection";
 import { environmentEndpointUrl } from "@t3tools/client-runtime/environment";
 import { ManagedRelay } from "@t3tools/client-runtime/relay";
-import type {
-  Task,
-  TaskAttachmentsResult,
-  TaskCommentsResult,
-  TaskFolder,
-  TaskId,
-  TaskLinksResult,
-  TaskList,
-  TaskPanel,
-  TaskQueryFilter,
-  TaskQueryResult,
-  ThreadId,
+import {
+  TaskStatusId,
+  type Task,
+  type TaskAttachmentsResult,
+  type TaskCommentsResult,
+  type TaskFolder,
+  type TaskId,
+  type TaskLinksResult,
+  type TaskList,
+  type TaskPanel,
+  type TaskQueryFilter,
+  type TaskQueryResult,
+  type TaskStatus,
+  type TaskStatusesResult,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -240,13 +243,18 @@ export async function deleteTaskFolder(
 
 export async function createManualTask(
   prepared: PreparedConnection,
-  input: { title: string; description?: string; listId?: string },
+  input: { title: string; description?: string; listId?: string; statusId?: string },
 ): Promise<Task> {
   const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/manual");
   return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
     client.tasks.createManual({
       headers,
-      payload: input,
+      payload: {
+        title: input.title,
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.listId !== undefined ? { listId: input.listId } : {}),
+        ...(input.statusId !== undefined ? { statusId: TaskStatusId.make(input.statusId) } : {}),
+      },
     }),
   );
 }
@@ -289,6 +297,73 @@ export async function syncProviderTasks(
     client.tasks.syncProvider({
       params: { providerId },
       headers,
+    }),
+  );
+}
+
+export async function fetchTaskStatuses(prepared: PreparedConnection): Promise<TaskStatusesResult> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/statuses");
+  return runTasksRequest(prepared, requestUrl, "GET", (client, headers) =>
+    client.tasks.taskStatuses({
+      headers,
+    }),
+  );
+}
+
+export async function createTaskStatus(
+  prepared: PreparedConnection,
+  input: { label: string; category: TaskStatus["category"]; color?: string },
+): Promise<TaskStatus> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/statuses");
+  return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.createTaskStatus({
+      headers,
+      payload: {
+        label: input.label,
+        category: input.category,
+        ...(input.color !== undefined ? { color: input.color } : {}),
+      },
+    }),
+  );
+}
+
+export async function updateTaskStatus(
+  prepared: PreparedConnection,
+  input: {
+    statusId: string;
+    label?: string;
+    category?: TaskStatus["category"];
+    color?: string | null;
+  },
+): Promise<TaskStatus> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/statuses/update");
+  return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.updateTaskStatus({
+      headers,
+      payload: {
+        statusId: TaskStatusId.make(input.statusId),
+        ...(input.label !== undefined ? { label: input.label } : {}),
+        ...(input.category !== undefined ? { category: input.category } : {}),
+        ...(input.color !== undefined ? { color: input.color } : {}),
+      },
+    }),
+  );
+}
+
+export async function deleteTaskStatus(
+  prepared: PreparedConnection,
+  input: { statusId: string; reassignToStatusId?: string },
+): Promise<void> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/statuses/delete");
+  await runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.deleteTaskStatus({
+      headers,
+      payload: {
+        statusId: TaskStatusId.make(input.statusId),
+        ...(input.reassignToStatusId !== undefined
+          ? { reassignToStatusId: TaskStatusId.make(input.reassignToStatusId) }
+          : {}),
+      },
     }),
   );
 }

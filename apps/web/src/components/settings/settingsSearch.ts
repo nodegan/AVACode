@@ -5,6 +5,7 @@ export type SettingsPath =
   | "/settings/providers"
   | "/settings/source-control"
   | "/settings/connections"
+  | "/settings/tasks"
   | "/settings/beta"
   | "/settings/archived";
 
@@ -26,6 +27,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/providers": "Providers",
   "/settings/source-control": "Source Control",
   "/settings/connections": "Connections",
+  "/settings/tasks": "Tasks",
   "/settings/beta": "Beta",
   "/settings/archived": "Archive",
 };
@@ -180,6 +182,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "clickup",
     title: "ClickUp",
     to: "/settings/connections",
+  },
+  {
+    id: "task-statuses",
+    title: "Task statuses",
+    to: "/settings/tasks",
   },
   {
     id: "sidebar-v2",

@@ -121,6 +121,46 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "taskStatuses",
+        Effect.fn("environment.tasks.taskStatuses")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* tasks
+            .listStatuses()
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_panel_failed", cause)));
+        }),
+      )
+      .handle(
+        "createTaskStatus",
+        Effect.fn("environment.tasks.createTaskStatus")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* tasks
+            .createStatus(args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_upsert_failed", cause)));
+        }),
+      )
+      .handle(
+        "updateTaskStatus",
+        Effect.fn("environment.tasks.updateTaskStatus")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* tasks
+            .updateStatus(args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_upsert_failed", cause)));
+        }),
+      )
+      .handle(
+        "deleteTaskStatus",
+        Effect.fn("environment.tasks.deleteTaskStatus")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* tasks
+            .deleteStatus(args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_upsert_failed", cause)));
+        }),
+      )
+      .handle(
         "addNote",
         Effect.fn("environment.tasks.addNote")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);

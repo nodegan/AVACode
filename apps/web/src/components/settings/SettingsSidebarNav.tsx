@@ -15,6 +15,7 @@ import {
   GitBranchIcon,
   KeyboardIcon,
   Link2Icon,
+  ListTodoIcon,
   PaletteIcon,
   SearchIcon,
   Settings2Icon,
@@ -52,6 +53,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/providers": BotIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/connections": Link2Icon,
+  "/settings/tasks": ListTodoIcon,
   "/settings/beta": FlaskConicalIcon,
   "/settings/archived": ArchiveIcon,
 };

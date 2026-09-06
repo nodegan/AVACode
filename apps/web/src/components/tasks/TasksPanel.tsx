@@ -9,6 +9,7 @@ import type {
   TaskProviderState,
   TaskQueryFilter,
   TaskQueryResult,
+  TaskStatus,
   TaskStatusCategory,
 } from "@t3tools/contracts";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
@@ -46,6 +47,7 @@ import {
   deleteTaskFolder,
   deleteTaskList,
   fetchTaskPanel,
+  fetchTaskStatuses,
   fetchTasksQuery,
   setTaskLinkedThread,
   syncProviderTasks,
@@ -359,6 +361,7 @@ export function TasksPanel(props: {
   const projectId = ProjectId.make(props.projectId);
   const activeThreadId = ThreadId.make(props.activeThread.id);
   const [panel, setPanel] = useState<TaskPanel | null>(null);
+  const [taskStatuses, setTaskStatuses] = useState<ReadonlyArray<TaskStatus>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
@@ -460,6 +463,13 @@ export function TasksPanel(props: {
       }
       try {
         setPanel(await fetchTaskPanel(prepared.value));
+        // Statuses ride along for the create dialog; a failure here must not
+        // take the whole panel down, so it only clears the picker.
+        try {
+          setTaskStatuses((await fetchTaskStatuses(prepared.value)).statuses);
+        } catch {
+          setTaskStatuses([]);
+        }
       } catch (cause) {
         if (!silent) setError(cause instanceof Error ? cause.message : "Failed to load tasks.");
       } finally {
@@ -1335,6 +1345,7 @@ export function TasksPanel(props: {
         onOpenChange={setCreateTaskOpen}
         groups={taskOptionGroups}
         defaultListId={listSelection.kind === "list" ? listSelection.listId : null}
+        statuses={taskStatuses}
         busy={busyKey === "task-create"}
         onSubmit={submitCreateTask}
       />

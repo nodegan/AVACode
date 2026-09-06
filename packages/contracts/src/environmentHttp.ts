@@ -38,9 +38,11 @@ import {
   CreateManualTaskInput,
   CreateTaskFolderInput,
   CreateTaskListInput,
+  CreateTaskStatusInput,
   DeleteTaskFolderInput,
   DeleteTaskInput,
   DeleteTaskListInput,
+  DeleteTaskStatusInput,
   ProviderIdParams,
   SetProviderCredentialInput,
   Task,
@@ -53,8 +55,11 @@ import {
   TaskPanel,
   TaskProviderConnectionStatus,
   TaskQueryResult,
+  TaskStatus,
+  TaskStatusesResult,
   QueryTasksInput,
   UpdateTaskInput,
+  UpdateTaskStatusInput,
 } from "./tasks.ts";
 import {
   RelayCloudEnvironmentHealthRequest,
@@ -695,6 +700,37 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
     HttpApiEndpoint.post("deleteFolder", "/api/tasks/folders/delete", {
       headers: OptionalBearerHeaders,
       payload: DeleteTaskFolderInput,
+      success: Schema.Void,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("taskStatuses", "/api/tasks/statuses", {
+      headers: OptionalBearerHeaders,
+      success: TaskStatusesResult,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createTaskStatus", "/api/tasks/statuses", {
+      headers: OptionalBearerHeaders,
+      payload: CreateTaskStatusInput,
+      success: TaskStatus,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("updateTaskStatus", "/api/tasks/statuses/update", {
+      headers: OptionalBearerHeaders,
+      payload: UpdateTaskStatusInput,
+      success: TaskStatus,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("deleteTaskStatus", "/api/tasks/statuses/delete", {
+      headers: OptionalBearerHeaders,
+      payload: DeleteTaskStatusInput,
       success: Schema.Void,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
