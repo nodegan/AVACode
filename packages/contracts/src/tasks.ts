@@ -27,6 +27,31 @@ export const TaskStatusCategory = Schema.Literals([
 ]);
 export type TaskStatusCategory = typeof TaskStatusCategory.Type;
 
+export const TaskStatusId = TrimmedNonEmptyString.pipe(Schema.brand("TaskStatusId"));
+export type TaskStatusId = typeof TaskStatusId.Type;
+
+/**
+ * A user-managed task status from the settings registry. Manual tasks attach
+ * to one of these by id and copy its label/category/color for display;
+ * provider-synced tasks keep their provider's own status fields.
+ */
+export const TaskStatus = Schema.Struct({
+  id: TaskStatusId,
+  label: TrimmedNonEmptyString,
+  category: TaskStatusCategory,
+  color: Schema.NullOr(TrimmedString).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** Registry display order; lower sorts first. */
+  sortOrder: Schema.Number,
+  /** How many tasks currently use the status. */
+  taskCount: Schema.Number,
+});
+export type TaskStatus = typeof TaskStatus.Type;
+
+export const TaskStatusesResult = Schema.Struct({
+  statuses: Schema.Array(TaskStatus).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type TaskStatusesResult = typeof TaskStatusesResult.Type;
+
 /** A task provider registered on the server (`"clickup"` today, Linear next). */
 export const TaskProviderInfo = Schema.Struct({
   id: TaskProviderId,
@@ -269,8 +294,36 @@ export const CreateManualTaskInput = Schema.Struct({
   title: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedString),
   listId: Schema.optional(TrimmedNonEmptyString),
+  /** A status from the settings registry; defaults to the first status. */
+  statusId: Schema.optional(TaskStatusId),
 });
 export type CreateManualTaskInput = typeof CreateManualTaskInput.Type;
+
+export const CreateTaskStatusInput = Schema.Struct({
+  label: TrimmedNonEmptyString,
+  category: TaskStatusCategory,
+  color: Schema.optional(TrimmedNonEmptyString),
+});
+export type CreateTaskStatusInput = typeof CreateTaskStatusInput.Type;
+
+export const UpdateTaskStatusInput = Schema.Struct({
+  statusId: TaskStatusId,
+  label: Schema.optional(TrimmedNonEmptyString),
+  category: Schema.optional(TaskStatusCategory),
+  /** Null clears the status color; omit to leave it unchanged. */
+  color: Schema.optional(Schema.NullOr(TrimmedString)),
+});
+export type UpdateTaskStatusInput = typeof UpdateTaskStatusInput.Type;
+
+export const DeleteTaskStatusInput = Schema.Struct({
+  statusId: TaskStatusId,
+  /**
+   * Where attached tasks go. Required when tasks still use the status: the
+   * caller picks a surviving status instead of the server guessing.
+   */
+  reassignToStatusId: Schema.optional(TaskStatusId),
+});
+export type DeleteTaskStatusInput = typeof DeleteTaskStatusInput.Type;
 
 export const CreateTaskListInput = Schema.Struct({
   name: TrimmedNonEmptyString,

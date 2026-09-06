@@ -1,9 +1,16 @@
 // Tiny event bus allowing components to programmatically open the command palette
 // without owning its React state.
+import type { Project } from "~/types";
+
 const COMMAND_PALETTE_OPEN_EVENT = "t3code:open-command-palette";
 
 export interface CommandPaletteOpenDetail {
-  readonly open?: "add-project" | "new-thread-in";
+  readonly open?: "add-project" | "new-thread-in" | "new-task-thread-in";
+  /**
+   * Only for "new-task-thread-in": invoked with the picked project so the
+   * opener decides what creating a thread there means (e.g. a task link).
+   */
+  readonly onProjectPick?: (project: Project) => void;
 }
 
 export function openCommandPalette(detail?: CommandPaletteOpenDetail): void {

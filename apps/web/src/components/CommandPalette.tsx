@@ -82,7 +82,7 @@ import {
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
-import { onOpenCommandPalette } from "../commandPaletteBus";
+import { onOpenCommandPalette, type CommandPaletteOpenDetail } from "../commandPaletteBus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
@@ -387,6 +387,10 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
+  const openNewTaskThreadIn = useCallback(() => dispatch({ _tag: "OpenNewTaskThreadIn" }), []);
+  // Set at bus-event time alongside the "new-task-thread-in" intent; the
+  // intent carries no payload, so the pick callback rides here instead.
+  const taskThreadPickRef = useRef<CommandPaletteOpenDetail["onProjectPick"]>(null);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
@@ -459,13 +463,16 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       onOpenCommandPalette((detail) => {
         if (detail.open === "new-thread-in") {
           openNewThreadIn();
+        } else if (detail.open === "new-task-thread-in") {
+          taskThreadPickRef.current = detail.onProjectPick ?? null;
+          openNewTaskThreadIn();
         } else if (detail.open === "add-project") {
           openAddProject();
         } else {
           setOpen(true);
         }
       }),
-    [openAddProject, openNewThreadIn, setOpen],
+    [openAddProject, openNewTaskThreadIn, openNewThreadIn, setOpen],
   );
 
   return (
@@ -489,6 +496,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           setOpen={setOpen}
           openOverlayMode={toggleMode}
           clearOpenIntent={clearOpenIntent}
+          taskThreadPickRef={taskThreadPickRef}
         />
       </CommandDialog>
     </ComposerHandleContext>
@@ -502,6 +510,7 @@ function CommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
+  readonly taskThreadPickRef: React.RefObject<CommandPaletteOpenDetail["onProjectPick"] | null>;
 }) {
   const composerHandleRef = useComposerHandleContext();
 
@@ -540,6 +549,7 @@ function CommandPaletteDialog(props: {
           setOpen={props.setOpen}
           openOverlayMode={props.openOverlayMode}
           clearOpenIntent={props.clearOpenIntent}
+          taskThreadPickRef={props.taskThreadPickRef}
         />
       )}
     </CommandDialogPopup>
@@ -551,6 +561,7 @@ function OpenCommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
+  readonly taskThreadPickRef: React.RefObject<CommandPaletteOpenDetail["onProjectPick"] | null>;
 }) {
   const navigate = useNavigate();
   const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
@@ -989,6 +1000,31 @@ function OpenCommandPaletteDialog(props: {
     [contextualProjectRef, handleNewThread, pickerProjects, projectGroupByTargetKey],
   );
 
+  // Same project list as "New thread in...", but picking one hands the
+  // project to the opener's callback (e.g. linking a task thread) instead
+  // of starting a draft.
+  const taskThreadProjectItems = useMemo(
+    () =>
+      enumerateCommandPaletteItems(
+        buildProjectActionItems({
+          projects: pickerProjects,
+          valuePrefix: "new-task-thread-in",
+          searchTerms: (project) => {
+            const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+            return (
+              group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
+            );
+          },
+          icon: projectFavicon,
+          runProject: async (project) => {
+            props.taskThreadPickRef.current?.(project);
+            props.taskThreadPickRef.current = null;
+          },
+        }),
+      ),
+    [pickerProjects, projectGroupByTargetKey],
+  );
+
   const allThreadItems = useMemo(
     () =>
       buildThreadActionItems({
@@ -1364,6 +1400,45 @@ function OpenCommandPaletteDialog(props: {
     openIntent,
     projectThreadItems,
     pushPaletteView,
+  ]);
+
+  useLayoutEffect(() => {
+    if (openIntent?.kind !== "new-task-thread-in" || taskThreadProjectItems.length === 0) {
+      return;
+    }
+    clearOpenIntent();
+    browseNavigation.invalidate();
+    setAddProjectCloneFlow(null);
+    setViewStack([]);
+    setQuery("");
+    const currentPrefix =
+      currentProjectEnvironmentId && currentProjectId
+        ? `new-task-thread-in:${currentProjectEnvironmentId}:${currentProjectId}`
+        : null;
+    const prioritized = currentPrefix
+      ? [
+          ...taskThreadProjectItems.filter((item) => item.value === currentPrefix),
+          ...taskThreadProjectItems.filter((item) => item.value !== currentPrefix),
+        ]
+      : taskThreadProjectItems;
+    pushPaletteView({
+      addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "projects",
+          label: "Projects",
+          items: prioritized,
+        },
+      ],
+    });
+  }, [
+    clearOpenIntent,
+    browseNavigation,
+    currentProjectEnvironmentId,
+    currentProjectId,
+    openIntent,
+    pushPaletteView,
+    taskThreadProjectItems,
   ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];

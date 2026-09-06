@@ -1,6 +1,6 @@
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type {
   Task,
   TaskId,
@@ -67,7 +67,15 @@ import {
   type TaskTreeDeleteTarget,
 } from "./TaskDialogs";
 import { waitForServerThreadDetail } from "../ChatView.logic";
+import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import { useRelativeTimeTick } from "~/components/settings/settingsLayout";
+import { openCommandPalette } from "~/commandPaletteBus";
+import { useClientSettings } from "~/hooks/useSettings";
+import { selectProjectGroupingSettings } from "~/logicalProject";
+import {
+  buildSidebarProjectPickerEntries,
+  buildSidebarProjectSnapshots,
+} from "~/sidebarProjectGrouping";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -79,6 +87,8 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { usePreparedConnection } from "~/state/session";
+import { useProjects, useThreadShells } from "~/state/entities";
+import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useRightPanelStore } from "~/rightPanelStore";
@@ -386,6 +396,43 @@ export function TasksPanel(props: {
     () => (panel?.providers ?? []).filter((provider) => provider.credentialConfigured),
     [panel?.providers],
   );
+
+  // Target options for "Create thread": the same logical project groups the
+  // new-thread picker uses, with the current project preferred first.
+  const projects = useProjects();
+  const threadShells = useThreadShells();
+  const { environments } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const projectSortOrder = useClientSettings((settings) => settings.sidebarProjectSortOrder);
+  const threadProjectOptions = useMemo(() => {
+    const environmentLabelById = new Map(
+      environments.map((environment) => [environment.environmentId, environment.label] as const),
+    );
+    return buildSidebarProjectPickerEntries({
+      groups: sortLogicalProjectsForSidebar(
+        buildSidebarProjectSnapshots({
+          projects,
+          settings: projectGroupingSettings,
+          primaryEnvironmentId,
+          resolveEnvironmentLabel: (environmentId) =>
+            environmentLabelById.get(environmentId) ?? null,
+        }),
+        threadShells,
+        projectSortOrder,
+      ),
+      preferredProjectRef: scopeProjectRef(props.environmentId, projectId),
+    });
+  }, [
+    environments,
+    primaryEnvironmentId,
+    projectGroupingSettings,
+    projectSortOrder,
+    props.environmentId,
+    projectId,
+    projects,
+    threadShells,
+  ]);
   const syncStatusProvider = useMemo<TaskProviderState | null>(() => {
     const connected = panel?.providers.filter((provider) => provider.credentialConfigured) ?? [];
     return (
@@ -630,14 +677,14 @@ export function TasksPanel(props: {
   );
 
   const createLinkedThread = useCallback(
-    async (task: Task) => {
+    async (task: Task, targetProject: { environmentId: EnvironmentId; projectId: ProjectId }) => {
       const threadId = newThreadId();
-      const threadRef = scopeThreadRef(props.environmentId, threadId);
+      const threadRef = scopeThreadRef(targetProject.environmentId, threadId);
       const createResult = await createThread({
-        environmentId: props.environmentId,
+        environmentId: targetProject.environmentId,
         input: {
           threadId,
-          projectId,
+          projectId: targetProject.projectId,
           title: task.title,
           modelSelection: props.activeThread.modelSelection,
           runtimeMode: props.activeThread.runtimeMode,
@@ -658,7 +705,7 @@ export function TasksPanel(props: {
       await navigate({
         to: "/$environmentId/$threadId",
         params: {
-          environmentId: props.environmentId,
+          environmentId: targetProject.environmentId,
           threadId,
         },
       });
@@ -673,9 +720,36 @@ export function TasksPanel(props: {
       props.activeThread.modelSelection,
       props.activeThread.runtimeMode,
       props.environmentId,
-      projectId,
       setTaskLink,
     ],
+  );
+
+  const requestCreateThread = useCallback(
+    (task: Task) => {
+      const createForProject = (project: { environmentId: EnvironmentId; projectId: ProjectId }) =>
+        void createLinkedThread(task, project);
+      // One option means there is nothing to choose; skip the picker and
+      // fall back to the current project when the picker has no entries.
+      const singleOption = threadProjectOptions.length <= 1 ? threadProjectOptions[0] : null;
+      if (singleOption) {
+        createForProject({
+          environmentId: singleOption.targetProject.environmentId,
+          projectId: ProjectId.make(singleOption.targetProject.id),
+        });
+        return;
+      }
+      // The sidebar's "New thread in..." picker; the picked project routes
+      // back into linked-thread creation.
+      openCommandPalette({
+        open: "new-task-thread-in",
+        onProjectPick: (project) =>
+          createForProject({
+            environmentId: project.environmentId,
+            projectId: ProjectId.make(project.id),
+          }),
+      });
+    },
+    [createLinkedThread, threadProjectOptions],
   );
 
   const navigateToThread = useCallback(
@@ -1129,7 +1203,7 @@ export function TasksPanel(props: {
       onDelete={() => deleteTask(task.id)}
       onLink={() => setTaskLink(task.id, activeThreadId)}
       onUnlink={() => setTaskLink(task.id, null)}
-      onCreateThread={() => void createLinkedThread(task)}
+      onCreateThread={() => requestCreateThread(task)}
       onNavigateThread={() => {
         if (task.linkedThreadId) {
           navigateToThread(props.environmentId, task.linkedThreadId);
