@@ -14,6 +14,7 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { newDraftId, newThreadId } from "../lib/utils";
+import { selectThreadRightPanelState, useRightPanelStore } from "../rightPanelStore";
 import { orderItemsByPreferredIds } from "../components/Sidebar.logic";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -200,6 +201,31 @@ export function useNewThreadHandler() {
             currentRouteTarget.draftId === reusableStoredDraftThread.draftId
           ) {
             return;
+          }
+          // Resurrecting a stored draft lands as a new thread, and the
+          // right panel's visibility follows the thread being left: an open
+          // panel stays open, and a closed one stays closed instead of
+          // resurrecting the draft's stale panel (e.g. a tasks panel left
+          // open on its last visit).
+          const rightPanel = useRightPanelStore.getState();
+          const leavingDraft =
+            currentRouteTarget?.kind === "draft"
+              ? getDraftSession(currentRouteTarget.draftId)
+              : null;
+          const leavingThreadRef =
+            currentRouteTarget?.kind === "server"
+              ? currentRouteTarget.threadRef
+              : leavingDraft
+                ? scopeThreadRef(leavingDraft.environmentId, leavingDraft.threadId)
+                : null;
+          const resurrectedThreadRef = scopeThreadRef(
+            reusableStoredDraftThread.environmentId,
+            reusableStoredDraftThread.threadId,
+          );
+          if (selectThreadRightPanelState(rightPanel.byThreadKey, leavingThreadRef).isOpen) {
+            rightPanel.show(resurrectedThreadRef);
+          } else {
+            rightPanel.close(resurrectedThreadRef);
           }
           await router.navigate({
             to: "/draft/$draftId",
