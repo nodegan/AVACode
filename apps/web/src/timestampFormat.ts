@@ -91,6 +91,14 @@ export function formatShortTimestamp(isoDate: string, timestampFormat: Timestamp
   return getTimestampFormatter(timestampFormat, false).format(date);
 }
 
+const shortDateFormatter = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" });
+
+export function formatShortDate(isoDate: string): string {
+  const date = parseTimestampDate(isoDate);
+  if (!date) return "";
+  return shortDateFormatter.format(date);
+}
+
 /**
  * Format a relative time string from an ISO date.
  * Returns `{ value: "20s", suffix: "ago" }` or `{ value: "just now", suffix: null }`

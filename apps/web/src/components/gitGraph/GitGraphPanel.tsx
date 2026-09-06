@@ -32,7 +32,7 @@ import {
 import { LegendList } from "@legendapp/list/react";
 
 import { computeGitGraphLayout, type GitGraphRowLayout } from "./gitGraphLanes";
-import { formatShortTimestamp } from "../../timestampFormat";
+import { formatShortDate, formatShortTimestamp } from "../../timestampFormat";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -565,7 +565,7 @@ export default function GitGraphPanel({
             type="button"
             onClick={() => setUncommittedExpanded((current) => !current)}
             aria-expanded={uncommittedExpanded}
-            className="flex w-full min-w-0 items-center gap-1.5 rounded-lg py-1.5 pr-2 text-left transition-colors focus-visible:bg-accent/50 hover:bg-accent/50 focus-visible:outline-none"
+            className="flex w-full min-w-0 items-center gap-1.5 rounded-lg py-1.5 pr-4 text-left transition-colors focus-visible:bg-accent/50 hover:bg-accent/50 focus-visible:outline-none"
             style={{ paddingLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
           >
             <ChevronDownIcon
@@ -586,7 +586,7 @@ export default function GitGraphPanel({
 
       if (item.type === "uncommitted-files") {
         return (
-          <div key={item.key} className="mx-1 my-1 rounded-lg bg-accent/40 py-1">
+          <div key={item.key} className="my-1 mr-4 rounded-lg py-1">
             {item.files.map((file) => (
               <div
                 key={file.path}
@@ -612,7 +612,7 @@ export default function GitGraphPanel({
         return (
           <div
             key={item.key}
-            className="my-1 mr-1 rounded-lg bg-accent/40 py-1"
+            className="my-1 mr-4 rounded-lg py-1"
             style={{ marginLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
           >
             {item.files.map((file) => {
@@ -708,7 +708,7 @@ export default function GitGraphPanel({
       return (
         <div
           key={item.key}
-          className="relative flex w-full min-w-0 items-center gap-2 pr-1"
+          className="relative flex w-full min-w-0 items-center gap-2 pr-4"
           style={{ height: GIT_GRAPH_ROW_HEIGHT }}
         >
           <button
@@ -730,12 +730,7 @@ export default function GitGraphPanel({
                 isHead={item.isHead}
               />
             </span>
-            <span
-              className={cn(
-                "flex min-w-0 flex-1 flex-col justify-center rounded-lg py-1 pr-1 transition-colors group-focus-visible:bg-accent/50 group-hover:bg-accent/50",
-                isExpanded && "bg-accent/40",
-              )}
-            >
+            <span className="flex min-w-0 flex-1 flex-col justify-center rounded-lg py-1 pr-1 transition-colors group-focus-visible:bg-accent/50 group-hover:bg-accent/50">
               <span className="flex max-w-full min-w-0 flex-col self-start rounded-lg px-2 py-1">
                 <span className="flex min-w-0 items-center gap-1.5">
                   {item.isHead ? (
@@ -814,22 +809,21 @@ export default function GitGraphPanel({
                         : null}
                     </Fragment>
                   ))}
-                  <span
+                  <CommitSubject
+                    subject={commit.subject}
                     className={cn(
-                      "min-w-0 truncate text-sm",
-                      isBranchTip
+                      "text-sm",
+                      isBranchTip || isExpanded
                         ? "text-foreground"
                         : "text-foreground/60 group-hover:text-foreground",
                     )}
-                  >
-                    {commit.subject}
-                  </span>
+                  />
                 </span>
               </span>
               <span
                 className={cn(
                   "mt-0.5 flex min-w-0 items-center gap-1.5 pl-2.5 text-xs",
-                  isBranchTip ? "text-muted-foreground" : "text-muted-foreground/60",
+                  isBranchTip || isExpanded ? "text-muted-foreground" : "text-muted-foreground/60",
                 )}
               >
                 <span className="truncate">{commit.authorName}</span>
@@ -839,6 +833,10 @@ export default function GitGraphPanel({
                     new Date(commit.timestamp * 1000).toISOString(),
                     settings.timestampFormat,
                   )}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className="shrink-0">
+                  {formatShortDate(new Date(commit.timestamp * 1000).toISOString())}
                 </span>
               </span>
             </span>
