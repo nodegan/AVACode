@@ -35,6 +35,37 @@ vp i
 vp run dev
 ```
 
+### Desktop artifacts
+
+Build installable desktop artifacts after compiling the workspace packages:
+
+```bash
+pnpm run build:desktop        # compile all workspace packages
+pnpm run dist:desktop:linux   # AppImage (x64)  -> release/
+pnpm run dist:desktop:dmg     # macOS dmg
+pnpm run dist:desktop:win     # Windows NSIS installer
+```
+
+Artifacts land in `release/`. The Linux and macOS builds also compile the
+resource monitor, so a Rust toolchain must be on your `PATH`.
+
+To try a desktop build without installing it, extract it and run in place:
+
+```bash
+./release/AVA-Code-<version>-x86_64.AppImage --appimage-extract
+./squashfs-root/t3code
+```
+
+To run a local desktop build alongside an installed AVA Code or T3 Code, give
+it its own state, port, and window identity — desktop builds otherwise share
+state and a fixed backend port with the installed app:
+
+```bash
+export T3CODE_HOME=~/.t3-ava                        # isolated state
+export T3CODE_PORT=3775                             # isolated backend port
+export T3CODE_DESKTOP_ENTRY_NAME=ava-code.desktop   # taskbar icon + grouping
+```
+
 ## Documentation
 
 Full docs live in [docs/](./docs). Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).

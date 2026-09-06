@@ -54,11 +54,11 @@ import {
   EyeIcon,
   GlobeIcon,
   HammerIcon,
+  ListTodoIcon,
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
-  SquareCheckBigIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -1550,7 +1550,7 @@ const UserMessageTaskContextChip = memo(function UserMessageTaskContextChip(prop
       <TooltipTrigger
         render={
           <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-border/70 bg-background/70 px-1.5 py-0.5 text-foreground/85 text-xs">
-            <SquareCheckBigIcon className="size-3 shrink-0" />
+            <ListTodoIcon className="size-3 shrink-0" />
             <span className="truncate">{props.task.title}</span>
           </span>
         }

@@ -1,4 +1,11 @@
-import type { EnvironmentId, GitGraphCommit, GitGraphCommitFile, Task } from "@t3tools/contracts";
+import type {
+  ContextMenuItem,
+  EnvironmentId,
+  GitGraphCommit,
+  GitGraphCommitFile,
+  Task,
+  VcsStatusResult,
+} from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -8,15 +15,20 @@ import {
   ChevronDownIcon,
   GitBranchIcon,
   GitCommitVerticalIcon,
+  ListTodoIcon,
   Loader2Icon,
-  MoreHorizontalIcon,
-  PlusIcon,
   RefreshCwIcon,
-  SquareCheckBigIcon,
   TagIcon,
-  Trash2Icon,
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useId, useMemo, useState } from "react";
+import {
+  Fragment,
+  type MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+} from "react";
 import { LegendList } from "@legendapp/list/react";
 
 import { computeGitGraphLayout, type GitGraphRowLayout } from "./gitGraphLanes";
@@ -41,14 +53,9 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../ui/menu";
 import { Input } from "../ui/input";
 import { toastManager } from "../ui/toast";
+import { readLocalApi } from "../../localApi";
 
 const GIT_GRAPH_MAX_LIMIT = 500;
 const GIT_GRAPH_LOAD_MORE_STEP = 200;
@@ -71,6 +78,8 @@ type GitGraphDialog =
   | { mode: "rename"; branch: string }
   | { mode: "delete"; branch: string };
 
+type CommitContextMenuAction = "create-branch" | `rename:${string}` | `delete:${string}`;
+
 type GitGraphListItem =
   | {
       type: "commit";
@@ -79,7 +88,9 @@ type GitGraphListItem =
       layout: GitGraphRowLayout;
       isHead: boolean;
     }
-  | { type: "file"; key: string; oid: string; file: GitGraphCommitFile }
+  | { type: "file-group"; key: string; oid: string; files: ReadonlyArray<GitGraphCommitFile> }
+  | { type: "uncommitted-header"; key: string; files: VcsStatusResult["workingTree"]["files"] }
+  | { type: "uncommitted-files"; key: string; files: VcsStatusResult["workingTree"]["files"] }
   | {
       type: "task-branches";
       key: string;
@@ -100,6 +111,47 @@ const FILE_STATUS_PRESENTATION: Record<
   typechange: { label: "T", className: "text-violet-600 dark:text-violet-400" },
   unknown: { label: "U", className: "text-muted-foreground" },
 };
+
+const CONVENTIONAL_COMMIT_PATTERN = /^([a-z]+)(?:\(([^)]*)\))?(!)?:\s*/;
+
+const CONVENTIONAL_COMMIT_CHIP_CLASS: Record<string, string> = {
+  feat: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+  fix: "bg-red-500/15 text-red-700 dark:text-red-300",
+  docs: "bg-blue-500/15 text-blue-700 dark:text-blue-300",
+  style: "bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300",
+  refactor: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
+  perf: "bg-orange-500/15 text-orange-700 dark:text-orange-300",
+  test: "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300",
+  chore: "bg-zinc-500/15 text-zinc-700 dark:text-zinc-300",
+  build: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  ci: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
+  revert: "bg-rose-500/15 text-rose-700 dark:text-rose-300",
+};
+
+function CommitSubject({ subject, className }: { subject: string; className?: string }) {
+  const match = CONVENTIONAL_COMMIT_PATTERN.exec(subject);
+  const chipClass = match === null ? undefined : CONVENTIONAL_COMMIT_CHIP_CLASS[match[1]!];
+  if (match === null || chipClass === undefined) {
+    return <span className={cn("min-w-0 truncate", className)}>{subject}</span>;
+  }
+  const [type, scope, breaking] = match.slice(1, 4) as [string, string | undefined, string];
+  const message = subject.slice(match[0].length);
+  return (
+    <span className={cn("flex min-w-0 items-center gap-1.5", className)}>
+      <span
+        className={cn(
+          "shrink-0 rounded-sm px-1 py-px text-[10px] font-medium leading-4",
+          chipClass,
+        )}
+      >
+        {type}
+        {breaking}
+      </span>
+      {scope ? <span className="shrink-0">{scope}</span> : null}
+      <span className="min-w-0 truncate">{message}</span>
+    </span>
+  );
+}
 
 function CommitGraphCell({
   layout,
@@ -215,6 +267,13 @@ export default function GitGraphPanel({
   const commits = graphLogQuery.data?.commits ?? [];
   const headOid = graphLogQuery.data?.headOid ?? null;
 
+  // Working-tree changes stream live from the vcs status subscription.
+  const statusQuery = useEnvironmentQuery(vcsEnvironment.status({ environmentId, input: { cwd } }));
+  const uncommittedFiles = statusQuery.data?.workingTree.files ?? [];
+  const hasUncommittedFiles =
+    statusQuery.data?.hasWorkingTreeChanges === true && uncommittedFiles.length > 0;
+  const [uncommittedExpanded, setUncommittedExpanded] = useState(false);
+
   // Tasks linked to branches: polled on the graph cadence, and refetched
   // instantly whenever any surface mutates a task (link/unlink/create).
   const prepared = usePreparedConnection(environmentId);
@@ -278,6 +337,16 @@ export default function GitGraphPanel({
 
   const listItems = useMemo<GitGraphListItem[]>(() => {
     const items: GitGraphListItem[] = [];
+    if (hasUncommittedFiles) {
+      items.push({ type: "uncommitted-header", key: "uncommitted", files: uncommittedFiles });
+      if (uncommittedExpanded) {
+        items.push({
+          type: "uncommitted-files",
+          key: "uncommitted:files",
+          files: uncommittedFiles,
+        });
+      }
+    }
     layout.rows.forEach((row, index) => {
       const commit = commits[index];
       if (!commit) return;
@@ -289,13 +358,9 @@ export default function GitGraphPanel({
         isHead: commit.oid === headOid,
       });
       if (commit.oid === expandedOid) {
-        for (const file of commitFilesQuery.data?.files ?? []) {
-          items.push({
-            type: "file",
-            key: `file:${commit.oid}:${file.status}:${file.previousPath ?? ""}:${file.path}`,
-            oid: commit.oid,
-            file,
-          });
+        const files = commitFilesQuery.data?.files ?? [];
+        if (files.length > 0) {
+          items.push({ type: "file-group", key: `files:${commit.oid}`, oid: commit.oid, files });
         }
       }
       if (revealedTask !== null && revealedTask.oid === commit.oid) {
@@ -316,10 +381,13 @@ export default function GitGraphPanel({
     commits,
     expandedOid,
     commitFilesQuery.data?.files,
+    hasUncommittedFiles,
     headOid,
     layout.rows,
     linkedTasks,
     revealedTask,
+    uncommittedExpanded,
+    uncommittedFiles,
   ]);
 
   const openCreateDialog = useCallback((oid: string) => {
@@ -334,6 +402,49 @@ export default function GitGraphPanel({
     setBranchName(branch);
     setDialog({ mode: "delete", branch });
   }, []);
+
+  const handleCommitContextMenu = useCallback(
+    async (event: ReactMouseEvent, commit: GitGraphCommit) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const api = readLocalApi();
+      if (!api) return;
+
+      const localRefs = commit.refs.filter((ref) => ref.kind === "local");
+      const items: ContextMenuItem<CommitContextMenuAction>[] = [
+        { id: "create-branch", label: "Create branch here" },
+        ...localRefs.map((ref) => ({
+          id: `rename:${ref.name}` as const,
+          label: `Rename ${ref.name}`,
+          icon: "pencil",
+        })),
+        ...localRefs
+          .filter((ref) => ref.name !== currentRefName)
+          .map((ref) => ({
+            id: `delete:${ref.name}` as const,
+            label: `Delete ${ref.name}`,
+            icon: "trash",
+            destructive: true,
+          })),
+      ];
+
+      const action = await api.contextMenu.show(items, { x: event.clientX, y: event.clientY });
+      if (action === null) return;
+      if (action === "create-branch") {
+        openCreateDialog(commit.oid);
+        return;
+      }
+      if (action.startsWith("rename:")) {
+        openRenameDialog(action.slice("rename:".length));
+        return;
+      }
+      if (action.startsWith("delete:")) {
+        openDeleteDialog(action.slice("delete:".length));
+      }
+    },
+    [currentRefName, openCreateDialog, openDeleteDialog, openRenameDialog],
+  );
 
   const submitDialog = useCallback(() => {
     if (dialog === null || dialogPending) return;
@@ -447,31 +558,90 @@ export default function GitGraphPanel({
 
   const renderRow = useCallback(
     (item: GitGraphListItem) => {
-      if (item.type === "file") {
-        const presentation = FILE_STATUS_PRESENTATION[item.file.status];
+      if (item.type === "uncommitted-header") {
         return (
           <button
             key={item.key}
             type="button"
-            onClick={() => onOpenCommitFile(item.oid, item.file.path)}
-            className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md py-1 pr-2 pl-2 text-left text-xs transition-colors hover:bg-accent/60"
+            onClick={() => setUncommittedExpanded((current) => !current)}
+            aria-expanded={uncommittedExpanded}
+            className="flex w-full min-w-0 items-center gap-1.5 rounded-lg py-1.5 pr-2 text-left transition-colors focus-visible:bg-accent/50 hover:bg-accent/50 focus-visible:outline-none"
             style={{ paddingLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
           >
-            <span
+            <ChevronDownIcon
               className={cn(
-                "w-3 shrink-0 text-center font-mono text-[10px]",
-                presentation.className,
+                "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                !uncommittedExpanded && "-rotate-90",
               )}
-            >
-              {presentation.label}
+            />
+            <span className="min-w-0 truncate text-xs font-medium text-foreground">
+              Uncommitted changes
             </span>
-            <span className="min-w-0 truncate text-foreground/90">{item.file.path}</span>
-            {item.file.previousPath ? (
-              <span className="min-w-0 truncate text-muted-foreground">
-                ← {item.file.previousPath}
-              </span>
-            ) : null}
+            <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+              {item.files.length}
+            </span>
           </button>
+        );
+      }
+
+      if (item.type === "uncommitted-files") {
+        return (
+          <div key={item.key} className="mx-1 my-1 rounded-lg bg-accent/40 py-1">
+            {item.files.map((file) => (
+              <div
+                key={file.path}
+                className="flex h-7 w-full min-w-0 items-center gap-2 pr-2 text-left text-xs"
+                style={{ paddingLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
+              >
+                <span className="min-w-0 truncate text-foreground/90">{file.path}</span>
+                {file.insertions + file.deletions > 0 ? (
+                  <span className="ms-auto shrink-0 font-mono text-[10px] tabular-nums">
+                    <span className="text-emerald-600 dark:text-emerald-400">
+                      +{file.insertions}
+                    </span>{" "}
+                    <span className="text-red-600 dark:text-red-400">−{file.deletions}</span>
+                  </span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        );
+      }
+
+      if (item.type === "file-group") {
+        return (
+          <div
+            key={item.key}
+            className="my-1 mr-1 rounded-lg bg-accent/40 py-1"
+            style={{ marginLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
+          >
+            {item.files.map((file) => {
+              const presentation = FILE_STATUS_PRESENTATION[file.status];
+              return (
+                <button
+                  key={`${file.status}:${file.previousPath ?? ""}:${file.path}`}
+                  type="button"
+                  onClick={() => onOpenCommitFile(item.oid, file.path)}
+                  className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md pr-2 pl-2 text-left text-xs transition-colors hover:bg-accent/60"
+                >
+                  <span
+                    className={cn(
+                      "w-3 shrink-0 text-center font-mono text-[10px]",
+                      presentation.className,
+                    )}
+                  >
+                    {presentation.label}
+                  </span>
+                  <span className="min-w-0 truncate text-foreground/90">{file.path}</span>
+                  {file.previousPath ? (
+                    <span className="min-w-0 truncate text-muted-foreground">
+                      ← {file.previousPath}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
         );
       }
 
@@ -534,20 +704,22 @@ export default function GitGraphPanel({
       const { commit } = item;
       const isBranchTip = commit.refs.some((ref) => ref.kind !== "tag");
       const laneTint = laneColor(item.layout.colorIndex);
+      const isExpanded = expandedOid === commit.oid;
       return (
         <div
           key={item.key}
-          className="group/row relative flex w-full min-w-0 items-center gap-2 pr-1"
+          className="relative flex w-full min-w-0 items-center gap-2 pr-1"
           style={{ height: GIT_GRAPH_ROW_HEIGHT }}
         >
           <button
             type="button"
-            className="flex min-h-full min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg text-left focus-visible:outline-none"
+            className="group flex min-h-full min-w-0 flex-1 cursor-pointer items-center gap-2 text-left focus-visible:outline-none"
             style={{ paddingLeft: 4 }}
             onClick={() =>
               setExpandedOid((current) => (current === commit.oid ? null : commit.oid))
             }
-            aria-expanded={expandedOid === commit.oid}
+            onContextMenu={(event) => void handleCommitContextMenu(event, commit)}
+            aria-expanded={isExpanded}
           >
             <span className="relative shrink-0">
               <CommitGraphCell
@@ -558,7 +730,12 @@ export default function GitGraphPanel({
                 isHead={item.isHead}
               />
             </span>
-            <span className="flex min-w-0 flex-1 flex-col justify-center">
+            <span
+              className={cn(
+                "flex min-w-0 flex-1 flex-col justify-center rounded-lg py-1 pr-1 transition-colors group-focus-visible:bg-accent/50 group-hover:bg-accent/50",
+                isExpanded && "bg-accent/40",
+              )}
+            >
               <span className="flex max-w-full min-w-0 flex-col self-start rounded-lg px-2 py-1">
                 <span className="flex min-w-0 items-center gap-1.5">
                   {item.isHead ? (
@@ -617,16 +794,17 @@ export default function GitGraphPanel({
                                   );
                                 }}
                               >
-                                <SquareCheckBigIcon className="size-3" />
+                                <ListTodoIcon className="size-3" />
                                 {single ? (
-                                  <span
+                                  <CommitSubject
+                                    subject={commit.subject}
                                     className={cn(
-                                      "max-w-32 truncate",
-                                      single.statusCategory === "done" && "opacity-70",
+                                      "text-sm",
+                                      isBranchTip
+                                        ? "text-foreground"
+                                        : "text-foreground/60 group-hover:text-foreground",
                                     )}
-                                  >
-                                    {single.title}
-                                  </span>
+                                  />
                                 ) : (
                                   <span>{branchTasks.length} linked tasks</span>
                                 )}
@@ -639,7 +817,9 @@ export default function GitGraphPanel({
                   <span
                     className={cn(
                       "min-w-0 truncate text-sm",
-                      isBranchTip ? "text-foreground" : "text-foreground/60",
+                      isBranchTip
+                        ? "text-foreground"
+                        : "text-foreground/60 group-hover:text-foreground",
                     )}
                   >
                     {commit.subject}
@@ -663,47 +843,6 @@ export default function GitGraphPanel({
               </span>
             </span>
           </button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Commit actions"
-                  className="shrink-0 opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100"
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <MoreHorizontalIcon className="size-3.5" />
-                </Button>
-              }
-            />
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem onClick={() => openCreateDialog(commit.oid)}>
-                <PlusIcon />
-                Create branch here
-              </DropdownMenuItem>
-              {commit.refs
-                .filter((ref) => ref.kind === "local")
-                .map((ref) => (
-                  <DropdownMenuItem key={ref.name} onClick={() => openRenameDialog(ref.name)}>
-                    <GitBranchIcon />
-                    Rename {ref.name}
-                  </DropdownMenuItem>
-                ))}
-              {commit.refs
-                .filter((ref) => ref.kind === "local" && ref.name !== currentRefName)
-                .map((ref) => (
-                  <DropdownMenuItem
-                    key={`delete:${ref.name}`}
-                    onClick={() => openDeleteDialog(ref.name)}
-                  >
-                    <Trash2Icon />
-                    Delete {ref.name}
-                  </DropdownMenuItem>
-                ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
         </div>
       );
     },
@@ -711,15 +850,16 @@ export default function GitGraphPanel({
       currentRefName,
       expandedOid,
       laneCount,
-      layout.rows.length,
       onOpenCommitFile,
       onOpenTask,
       openCreateDialog,
       openDeleteDialog,
       openRenameDialog,
+      handleCommitContextMenu,
       revealedTask,
       settings.timestampFormat,
       tasksByBranch,
+      uncommittedExpanded,
     ],
   );
 

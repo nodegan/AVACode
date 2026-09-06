@@ -26,12 +26,12 @@ import {
   LinkIcon,
   ListIcon,
   ListPlusIcon,
+  ListTodoIcon,
   Loader2Icon,
   MessageSquareIcon,
   PlusIcon,
   RefreshCwIcon,
   SettingsIcon,
-  SquareCheckBigIcon,
   Trash2Icon,
   UserIcon,
 } from "lucide-react";
@@ -1456,7 +1456,7 @@ export function TasksPanel(props: {
                     ) : detailTask?.listId ? (
                       <ListIcon className="size-3.5 shrink-0" />
                     ) : (
-                      <SquareCheckBigIcon className="size-3.5 shrink-0" />
+                      <ListTodoIcon className="size-3.5 shrink-0" />
                     )}
                     <span className="min-w-0 truncate">
                       {detailBreadcrumb.folderName
@@ -1736,14 +1736,14 @@ export function TasksPanel(props: {
               onClick={() => setCreateTaskOpen(true)}
               disabled={busyKey === "task-create"}
             >
-              <SquareCheckBigIcon className="size-3.5" />
+              <ListTodoIcon className="size-3.5" />
               Task
             </Button>
           </div>
           {hasTreeContent ? (
             <div className="space-y-0.5">
               <NavTreeRow
-                icon={<SquareCheckBigIcon />}
+                icon={<ListTodoIcon />}
                 label="All tasks"
                 count={allTasksCount}
                 active={listSelection.kind === "all"}

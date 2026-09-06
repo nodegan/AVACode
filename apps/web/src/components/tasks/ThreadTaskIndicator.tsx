@@ -1,6 +1,6 @@
 import type { EnvironmentId, Task, TaskStatus, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { SquareCheckBigIcon } from "lucide-react";
+import { ListTodoIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { usePreparedConnection } from "~/state/session";
@@ -145,7 +145,7 @@ export function ThreadTaskIndicator(props: {
                 onClick={() => openTask()}
                 className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm bg-primary/10 px-1 py-0.5 text-primary outline-none transition-colors hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <SquareCheckBigIcon className="size-3.5 shrink-0" />
+                <ListTodoIcon className="size-3.5 shrink-0" />
                 <span className="hidden max-w-40 truncate text-xs font-medium md:inline">
                   {summary.title}
                 </span>
@@ -157,7 +157,7 @@ export function ThreadTaskIndicator(props: {
                 onClick={() => setChooserOpen(true)}
                 className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm bg-primary/10 px-1 py-0.5 text-primary outline-none transition-colors hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <SquareCheckBigIcon className="size-3.5 shrink-0" />
+                <ListTodoIcon className="size-3.5 shrink-0" />
                 <span className="hidden text-xs font-medium md:inline">
                   {summaries.length} tasks
                 </span>

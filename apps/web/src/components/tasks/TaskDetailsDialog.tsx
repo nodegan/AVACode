@@ -29,7 +29,6 @@ import {
   PaperclipIcon,
   PencilIcon,
   PlusIcon,
-  SquareCheckBigIcon,
   Trash2Icon,
   UnlinkIcon,
   UserIcon,
@@ -1188,7 +1187,7 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
     <div className="flex items-center gap-0.5">
       {showCreateThread ? (
         <Button size="sm" onClick={props.onCreateThread}>
-          <SquareCheckBigIcon className="size-3.5" />
+          <ListTodoIcon className="size-3.5" />
           Create thread
         </Button>
       ) : null}

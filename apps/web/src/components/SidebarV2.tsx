@@ -28,12 +28,12 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   EllipsisIcon,
+  ListTodoIcon,
   MessageSquareIcon,
   PinIcon,
   PlusIcon,
   SearchIcon,
   ServerIcon,
-  SquareCheckBigIcon,
   SquarePenIcon,
   TerminalIcon,
   Trash2Icon,
@@ -857,7 +857,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             />
           }
         >
-          <SquareCheckBigIcon className="size-3.5" />
+          <ListTodoIcon className="size-3.5" />
           {taskLinks.length > 1 ? (
             <span className="text-[10px] font-semibold tabular-nums">{taskLinks.length}</span>
           ) : null}

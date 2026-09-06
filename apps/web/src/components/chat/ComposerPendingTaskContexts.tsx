@@ -1,4 +1,4 @@
-import { SquareCheckBigIcon, X } from "lucide-react";
+import { ListTodoIcon, X } from "lucide-react";
 
 import {
   COMPOSER_INLINE_CHIP_CLASS_NAME,
@@ -25,7 +25,7 @@ export function ComposerPendingTaskContexts({
     <div className={cn("flex flex-wrap gap-1.5", className)}>
       {tasks.map((task) => (
         <span key={task.id} className={cn(COMPOSER_INLINE_CHIP_CLASS_NAME, "pr-1")}>
-          <SquareCheckBigIcon className={cn(COMPOSER_INLINE_CHIP_ICON_CLASS_NAME, "size-3.5")} />
+          <ListTodoIcon className={cn(COMPOSER_INLINE_CHIP_ICON_CLASS_NAME, "size-3.5")} />
           <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{task.title}</span>
           <button
             type="button"

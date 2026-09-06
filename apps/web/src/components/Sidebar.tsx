@@ -7,8 +7,8 @@ import {
   FolderPlusIcon,
   Globe2Icon,
   LoaderIcon,
+  ListTodoIcon,
   SearchIcon,
-  SquareCheckBigIcon,
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
@@ -711,7 +711,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                   />
                 }
               >
-                <SquareCheckBigIcon className="size-3" />
+                <ListTodoIcon className="size-3" />
                 {taskLinks.length > 1 ? (
                   <span className="text-[10px] font-semibold tabular-nums">{taskLinks.length}</span>
                 ) : null}
