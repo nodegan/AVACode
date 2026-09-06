@@ -66,10 +66,6 @@ const TRAILING_TASK_CONTEXT_BLOCK_PATTERN = /\n*<task_context>\n([\s\S]*?)\n<\/t
 
 const TASK_CONTEXT_TITLE_PATTERN = /^## Task: (.+)$/;
 
-/** Conventional-commit-style branch prefixes offered for task branches. */
-export const TASK_BRANCH_PREFIXES = ["feature", "bugfix", "hotfix", "chore"] as const;
-export type TaskBranchPrefix = (typeof TASK_BRANCH_PREFIXES)[number];
-
 function slugifyBranchPart(value: string): string {
   return value
     .toLowerCase()
@@ -80,14 +76,19 @@ function slugifyBranchPart(value: string): string {
 }
 
 /**
- * Conventional-commit-style branch name:
- * `<prefix>/<CLICKUP_ID>/<description>`, e.g. `feature/PR-1685/fix-login-redirect`.
- * The ID keeps its original casing (`PR-1685`); only the description slugs.
+ * Conventional-commit-style branch name used to prefill the create-branch
+ * dialog: `<prefix>/<CLICKUP_ID>/<description>`, e.g.
+ * `feature/PR-1685/fix-login-redirect`. The ID keeps its original casing
+ * (`PR-1685`); only the description slugs. Tasks without a tracker id
+ * (manual tasks) skip the id segment instead of leaking the long internal
+ * record id. The prefix defaults to `feature` and the whole name is
+ * editable before the branch is created.
  */
-export function buildTaskBranchName(task: Task, prefix: TaskBranchPrefix): string {
-  const id = sanitizeBranchId(task.externalCustomId ?? task.externalTaskId ?? task.id);
+export function buildTaskBranchName(task: Task, prefix = "feature"): string {
+  const externalId = task.externalCustomId ?? task.externalTaskId;
+  const id = externalId === null ? "" : sanitizeBranchId(externalId);
   const description = slugifyBranchPart(task.title);
-  return description.length > 0 ? `${prefix}/${id}/${description}` : `${prefix}/${id}`;
+  return [prefix, id, description].filter((part) => part.length > 0).join("/");
 }
 
 /** Git-ref-safe version of the provider's task ID, preserving its casing. */

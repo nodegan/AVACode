@@ -124,6 +124,10 @@ describe("task context block", () => {
 });
 
 describe("buildTaskBranchName", () => {
+  it("defaults to the feature prefix for the dialog prefill", () => {
+    expect(buildTaskBranchName(makeTask())).toBe("feature/abc123/fix-login-redirect");
+  });
+
   it("builds prefix/clickup-id/slug branch names", () => {
     expect(buildTaskBranchName(makeTask(), "feature")).toBe("feature/abc123/fix-login-redirect");
     expect(buildTaskBranchName(makeTask(), "bugfix")).toBe("bugfix/abc123/fix-login-redirect");
@@ -135,12 +139,22 @@ describe("buildTaskBranchName", () => {
     );
   });
 
-  it("falls back to the task id when no ClickUp id exists and drops empty slugs", () => {
+  it("omits the id segment when no tracker id exists (manual tasks)", () => {
     const manual = makeTask({ provider: "manual", externalTaskId: null, externalCustomId: null });
-    expect(buildTaskBranchName(manual, "hotfix")).toBe("hotfix/task-1/fix-login-redirect");
+    expect(buildTaskBranchName(manual, "hotfix")).toBe("hotfix/fix-login-redirect");
+  });
+
+  it("drops empty slugs and collapses to the bare prefix as a last resort", () => {
     expect(buildTaskBranchName(makeTask({ title: "???", externalCustomId: null }), "chore")).toBe(
       "chore/abc123",
     );
+    const bare = makeTask({
+      provider: "manual",
+      externalTaskId: null,
+      externalCustomId: null,
+      title: "???",
+    });
+    expect(buildTaskBranchName(bare, "chore")).toBe("chore");
   });
 
   it("keeps git-unfriendly characters out of the branch name", () => {
