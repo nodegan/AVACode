@@ -88,11 +88,24 @@ describe("TaskTurnContext", () => {
   });
 
   it("wraps the markdown in a labeled task_context block", () => {
-    const block = buildLinkedTaskContextBlock(makeTask());
+    const block = buildLinkedTaskContextBlock([{ task: makeTask() }]);
     expect(block.startsWith("<task_context>\nThis thread is linked to the following task:")).toBe(
       true,
     );
     expect(block).toContain("## Task: Fix login redirect");
+    expect(block.endsWith("</task_context>")).toBe(true);
+  });
+
+  it("wraps several linked tasks with a plural label", () => {
+    const block = buildLinkedTaskContextBlock([
+      { task: makeTask() },
+      { task: makeTask({ id: TaskId.make("task-2"), title: "Rotate staging tokens" }) },
+    ]);
+    expect(block.startsWith("<task_context>\nThis thread is linked to the following tasks:")).toBe(
+      true,
+    );
+    expect(block).toContain("## Task: Fix login redirect");
+    expect(block).toContain("## Task: Rotate staging tokens");
     expect(block.endsWith("</task_context>")).toBe(true);
   });
 

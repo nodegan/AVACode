@@ -232,8 +232,12 @@ function TaskCard(props: TaskCardProps) {
           {task.linkedThreadId ? (
             <button
               type="button"
-              aria-label="Unlink from thread"
-              title="Unlink from thread"
+              aria-label={
+                props.isCurrentThread ? "Unlink from this thread" : "Unlink from linked thread"
+              }
+              title={
+                props.isCurrentThread ? "Unlink from this thread" : "Unlink from linked thread"
+              }
               disabled={props.busyKey === `task-link:${task.id}`}
               className={cardActionClassName}
               onClick={(event) => {

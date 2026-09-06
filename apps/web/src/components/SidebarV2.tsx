@@ -493,7 +493,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     gitStatus: gitStatus.data,
   });
   const prState = pr?.state ?? null;
-  const taskLink = useTaskLinksByThreadId(thread.environmentId).get(thread.id) ?? null;
+  const taskLinks = useTaskLinksByThreadId(thread.environmentId).get(thread.id) ?? [];
 
   // Same semantics as v1 (never-visited counts as read): flipping the beta
   // flag must not light up every historical thread as unread.
@@ -844,25 +844,31 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     </span>
   ) : null;
 
-  const taskBadge = taskLink ? (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            role="img"
-            aria-label={`Task: ${taskLink.title}`}
-            data-testid={`sidebar-v2-task-indicator-${thread.id}`}
-            className="inline-flex shrink-0 items-center justify-center rounded-sm text-primary"
-          />
-        }
-      >
-        <SquareCheckBigIcon className="size-3.5" />
-      </TooltipTrigger>
-      <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
-        Task: {taskLink.title}
-      </TooltipPopup>
-    </Tooltip>
-  ) : null;
+  const taskBadge =
+    taskLinks.length > 0 ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              role="img"
+              aria-label={`Linked tasks: ${taskLinks.map((entry) => entry.title).join(", ")}`}
+              data-testid={`sidebar-v2-task-indicator-${thread.id}`}
+              className="inline-flex shrink-0 items-center justify-center gap-0.5 rounded-sm text-primary"
+            />
+          }
+        >
+          <SquareCheckBigIcon className="size-3.5" />
+          {taskLinks.length > 1 ? (
+            <span className="text-[10px] font-semibold tabular-nums">{taskLinks.length}</span>
+          ) : null}
+        </TooltipTrigger>
+        <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
+          {taskLinks.length > 1
+            ? `Linked tasks: ${taskLinks.map((entry) => entry.title).join(", ")}`
+            : `Task: ${taskLinks[0]?.title ?? ""}`}
+        </TooltipPopup>
+      </Tooltip>
+    ) : null;
 
   if (variant === "slim") {
     return (

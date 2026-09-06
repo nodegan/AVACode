@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
+  type TaskComment,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -742,37 +743,45 @@ const make = Effect.gen(function* () {
     return { sessionThreadId: startedSession.threadId, sessionHistoryFresh: true };
   });
 
-  // Best-effort: a linked task enriches the turn but must never block it.
+  // Best-effort: linked tasks enrich the turn but must never block it.
   // ClickUp comments join the brief when they answer quickly; a slow ClickUp
   // degrades the context to notes-only rather than delay the turn.
   const loadLinkedTaskContext = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const task = yield* taskService
-      .queryTasks({ filter: { linkedThreadId: threadId, page: 1, pageSize: 1 } })
+    const tasks = yield* taskService
+      .queryTasks({ filter: { linkedThreadId: threadId, page: 1, pageSize: 10 } })
       .pipe(
-        Effect.map((result) => result.tasks[0] ?? null),
+        Effect.map((result) => result.tasks),
         Effect.catchCause((cause) =>
           Effect.logWarning("provider command reactor failed to load linked task context", {
             threadId,
             cause: Cause.pretty(cause),
-          }).pipe(Effect.as(null)),
+          }).pipe(Effect.as([])),
         ),
       );
-    if (task === null) return null;
-    if (task.externalTaskId === null) {
-      return buildLinkedTaskContextBlock(task);
-    }
-    const comments = yield* taskService.getTaskComments(task.id).pipe(
-      Effect.map((result) => result.comments),
-      Effect.timeout(LINKED_TASK_COMMENTS_TIMEOUT),
-      Effect.catchCause((cause) =>
-        Effect.logWarning("provider command reactor timed out loading task comments", {
-          threadId,
-          taskId: task.id,
-          cause: Cause.pretty(cause),
-        }).pipe(Effect.as([])),
+    if (tasks.length === 0) return null;
+    // Comments load in parallel so several provider tasks cost one timeout,
+    // not one per task.
+    const commentsPerTask = yield* Effect.all(
+      tasks.map((task) =>
+        task.externalTaskId === null
+          ? Effect.succeed([] as ReadonlyArray<TaskComment>)
+          : taskService.getTaskComments(task.id).pipe(
+              Effect.map((result) => result.comments),
+              Effect.timeout(LINKED_TASK_COMMENTS_TIMEOUT),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("provider command reactor timed out loading task comments", {
+                  threadId,
+                  taskId: task.id,
+                  cause: Cause.pretty(cause),
+                }).pipe(Effect.as([])),
+              ),
+            ),
       ),
+      { discard: false },
     );
-    return buildLinkedTaskContextBlock(task, comments);
+    return buildLinkedTaskContextBlock(
+      tasks.map((task, index) => ({ task, comments: commentsPerTask[index] ?? [] })),
+    );
   });
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {

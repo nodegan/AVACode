@@ -129,12 +129,13 @@ export async function fetchTaskLinks(prepared: PreparedConnection): Promise<Task
   );
 }
 
-export async function fetchThreadTask(
+/** Every task linked to the thread, newest-updated first. */
+export async function fetchThreadTasks(
   prepared: PreparedConnection,
   threadId: ThreadId,
-): Promise<Task | null> {
-  const result = await fetchTasksQuery(prepared, { linkedThreadId: threadId, pageSize: 1 });
-  return result.tasks[0] ?? null;
+): Promise<ReadonlyArray<Task>> {
+  const result = await fetchTasksQuery(prepared, { linkedThreadId: threadId, pageSize: 50 });
+  return result.tasks;
 }
 
 // Both detail fetches relay to the provider, whose latency spikes past the

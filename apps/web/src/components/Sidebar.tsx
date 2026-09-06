@@ -456,7 +456,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     gitStatus: gitStatus.data,
   });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
-  const taskLink = useTaskLinksByThreadId(thread.environmentId).get(thread.id) ?? null;
+  const taskLinks = useTaskLinksByThreadId(thread.environmentId).get(thread.id) ?? [];
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;
   const threadMetaClassName = isConfirmingArchive
@@ -700,21 +700,26 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               </TooltipPopup>
             </Tooltip>
           )}
-          {taskLink && (
+          {taskLinks.length > 0 && (
             <Tooltip>
               <TooltipTrigger
                 render={
                   <span
                     role="img"
-                    aria-label={`Task: ${taskLink.title}`}
-                    className="inline-flex shrink-0 items-center justify-center rounded-sm text-primary"
+                    aria-label={`Linked tasks: ${taskLinks.map((entry) => entry.title).join(", ")}`}
+                    className="inline-flex shrink-0 items-center justify-center gap-0.5 rounded-sm text-primary"
                   />
                 }
               >
                 <SquareCheckBigIcon className="size-3" />
+                {taskLinks.length > 1 ? (
+                  <span className="text-[10px] font-semibold tabular-nums">{taskLinks.length}</span>
+                ) : null}
               </TooltipTrigger>
               <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
-                Task: {taskLink.title}
+                {taskLinks.length > 1
+                  ? `Linked tasks: ${taskLinks.map((entry) => entry.title).join(", ")}`
+                  : `Task: ${taskLinks[0]?.title ?? ""}`}
               </TooltipPopup>
             </Tooltip>
           )}

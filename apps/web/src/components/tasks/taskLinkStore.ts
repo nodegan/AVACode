@@ -7,7 +7,8 @@ import { usePreparedConnection } from "~/state/session";
 import { fetchTaskLinks } from "./taskApi";
 
 interface TaskLinksState {
-  readonly byThreadId: ReadonlyMap<string, TaskLinkSummary>;
+  /** All linked tasks per thread; a thread can carry several. */
+  readonly byThreadId: ReadonlyMap<string, ReadonlyArray<TaskLinkSummary>>;
 }
 
 const EMPTY_STATE: TaskLinksState = { byThreadId: new Map() };
@@ -33,9 +34,14 @@ function createTaskLinksStore() {
     const promise = (async () => {
       try {
         const result = await fetchTaskLinks(prepared);
-        const byThreadId = new Map<string, TaskLinkSummary>();
+        const byThreadId = new Map<string, Array<TaskLinkSummary>>();
         for (const link of result.links) {
-          byThreadId.set(link.threadId, link);
+          const bucket = byThreadId.get(link.threadId);
+          if (bucket) {
+            bucket.push(link);
+          } else {
+            byThreadId.set(link.threadId, [link]);
+          }
         }
         states.set(environmentId, { byThreadId });
       } catch {
@@ -106,7 +112,7 @@ function useTaskLinksStoreState(environmentId: EnvironmentId): TaskLinksState {
 
 export function useTaskLinksByThreadId(
   environmentId: EnvironmentId,
-): ReadonlyMap<string, TaskLinkSummary> {
+): ReadonlyMap<string, ReadonlyArray<TaskLinkSummary>> {
   return useTaskLinksStoreState(environmentId).byThreadId;
 }
 

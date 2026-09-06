@@ -13,8 +13,10 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CloudIcon,
+  CopyIcon,
   EllipsisIcon,
   ExternalLinkIcon,
+  HashIcon,
   HistoryIcon,
   GitBranchIcon,
   Link2Icon,
@@ -60,9 +62,10 @@ import { useComposerHandleContext } from "~/composerHandleContext";
 import { buildTaskBranchName } from "~/lib/taskContext";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { useProject, useThread } from "~/state/entities";
+import { useProject, useThread, useThreadShell } from "~/state/entities";
 import { vcsEnvironment } from "~/state/vcs";
 import { usePreparedConnection } from "~/state/session";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 
 import { ExpandedImageDialog } from "../chat/ExpandedImageDialog";
@@ -99,6 +102,46 @@ export function formatTaskStatusLabel(task: Task): string {
     default:
       return task.statusLabel;
   }
+}
+
+/**
+ * Copyable id cell for the details grid, carrying the provider's human-facing
+ * task id (e.g. `PR-1685`).
+ */
+function TaskIdFieldValue(props: { taskId: string }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard<{ taskId: string }>({
+    target: "task ID",
+    onCopy: ({ taskId }) => {
+      toastManager.add({ type: "success", title: "Task ID copied", description: taskId });
+    },
+    onError: (error) => {
+      toastManager.add({
+        type: "error",
+        title: "Failed to copy task ID",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      });
+    },
+  });
+  return (
+    <span className="flex items-center gap-1">
+      <span className="truncate font-mono text-sm">{props.taskId}</span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label={isCopied ? "Task ID copied" : `Copy task ID ${props.taskId}`}
+              onClick={() => copyToClipboard(props.taskId, { taskId: props.taskId })}
+              className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+            </button>
+          }
+        />
+        <TooltipPopup side="bottom">{isCopied ? "Copied" : "Copy task ID"}</TooltipPopup>
+      </Tooltip>
+    </span>
+  );
 }
 
 export function TaskStatusBadge({ task }: { task: Task }) {
@@ -794,6 +837,9 @@ function TaskDetailField(props: {
 export function TaskDetailsBody(props: TaskDetailsBodyProps) {
   const { task } = props;
   const imageUrls = useMemo(() => extractImageUrls(task.description), [task.description]);
+  // The provider's human-facing id; manual tasks have none, and their
+  // internal record id stays hidden.
+  const displayTaskId = task.externalCustomId ?? task.externalTaskId;
 
   return (
     <>
@@ -814,6 +860,13 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
                 : "Provider"
           }
         />
+        {displayTaskId ? (
+          <TaskDetailField
+            icon={<HashIcon />}
+            label="ID"
+            value={<TaskIdFieldValue taskId={displayTaskId} />}
+          />
+        ) : null}
         <TaskDetailField
           icon={<CalendarIcon />}
           label="Created"
@@ -983,6 +1036,21 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
     props.activeThreadId !== null && linkedThreadId === props.activeThreadId;
   const isLinkBusy = props.busyKey === `task-link:${task.id}`;
   const composerRef = useComposerHandleContext();
+  // Unlinking detaches the task from its one linked thread, which may not be
+  // the one the user is looking at; name it when the shell index knows it.
+  const linkedThreadShell = useThreadShell(
+    props.environmentId && linkedThreadId
+      ? scopeThreadRef(props.environmentId, linkedThreadId)
+      : null,
+  );
+  const unlinkLabel =
+    linkedThreadId === null
+      ? "Unlink from thread"
+      : isLinkedToCurrentThread
+        ? "Unlink from this thread"
+        : linkedThreadShell?.title != null
+          ? `Unlink from “${linkedThreadShell.title}”`
+          : "Unlink from linked thread";
 
   const addToThread = () => {
     const handle = composerRef?.current;
@@ -1057,7 +1125,7 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
               {showUnlink ? (
                 <MenuItem onClick={props.onUnlink} disabled={isLinkBusy}>
                   <UnlinkIcon />
-                  Unlink from thread
+                  {unlinkLabel}
                 </MenuItem>
               ) : null}
               {showEdit ? (

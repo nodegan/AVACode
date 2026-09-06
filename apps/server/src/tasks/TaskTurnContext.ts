@@ -11,15 +11,28 @@ export function formatTaskAsTurnContext(task: Task, comments?: ReadonlyArray<Tas
   return formatTaskContext(task, comments === undefined ? undefined : { comments });
 }
 
+/** One linked task plus whatever provider comments were fetched for it. */
+export interface LinkedTaskContextEntry {
+  readonly task: Task;
+  readonly comments?: ReadonlyArray<TaskComment>;
+}
+
 /**
  * Block appended to the outgoing provider input for a thread's first turn on
- * a fresh provider session: the model must know what the linked task is
- * without the user attaching anything to the chat. Same `<task_context>`
- * wrapper as the composer-attached blocks.
+ * a fresh provider session: the model must know which tasks the thread is
+ * linked to without the user attaching anything to the chat. Same
+ * `<task_context>` wrapper as the composer-attached blocks; a thread can
+ * carry several linked tasks.
  */
 export function buildLinkedTaskContextBlock(
-  task: Task,
-  comments?: ReadonlyArray<TaskComment>,
+  entries: ReadonlyArray<LinkedTaskContextEntry>,
 ): string {
-  return `<task_context>\nThis thread is linked to the following task:\n\n${formatTaskAsTurnContext(task, comments)}\n</task_context>`;
+  const [first] = entries;
+  const formatEntry = (entry: LinkedTaskContextEntry) =>
+    formatTaskAsTurnContext(entry.task, entry.comments);
+  if (entries.length === 1 && first) {
+    return `<task_context>\nThis thread is linked to the following task:\n\n${formatEntry(first)}\n</task_context>`;
+  }
+  const bodies = entries.map(formatEntry).join("\n\n");
+  return `<task_context>\nThis thread is linked to the following tasks:\n\n${bodies}\n</task_context>`;
 }
