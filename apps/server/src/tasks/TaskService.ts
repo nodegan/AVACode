@@ -1011,7 +1011,9 @@ const make = Effect.gen(function* () {
         description: input.description ?? current.description,
         statusLabel: status?.label ?? current.statusLabel,
         statusCategory: status?.category ?? current.statusCategory,
-        statusColor: status?.color ?? current.statusColor,
+        // A picked status contributes its color even when it has none; only an
+        // absent status edit keeps the current tint.
+        statusColor: input.statusId === undefined ? current.statusColor : (status?.color ?? null),
         statusId: status?.id ?? current.statusId,
         linkedThreadId:
           input.linkedThreadId !== undefined ? input.linkedThreadId : current.linkedThreadId,

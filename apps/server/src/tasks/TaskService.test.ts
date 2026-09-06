@@ -946,6 +946,32 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
     }).pipe(Effect.provide(TestLayers)),
   );
 
+  it.effect("updateTask clears the status color when the new status has none", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskService;
+      const colored = yield* service.createStatus({
+        label: "Colored",
+        category: "in_progress",
+        color: "#0284c7",
+      });
+      const task = yield* service.createManualTask({ title: "Tinted", statusId: colored.id });
+      assert.strictEqual(task.statusColor, "#0284c7");
+
+      const statuses = yield* service.listStatuses();
+      const colorless = statuses.statuses.find((status) => status.label === "To do");
+      assert.ok(colorless);
+
+      // Only retitle: the tint from the colored status survives.
+      const retitled = yield* service.updateTask({ taskId: task.id, title: "Retitled" });
+      assert.strictEqual(retitled.statusColor, "#0284c7");
+
+      // Moving to a colorless status drops the tint instead of keeping it.
+      const moved = yield* service.updateTask({ taskId: task.id, statusId: colorless.id });
+      assert.strictEqual(moved.statusId, colorless.id);
+      assert.strictEqual(moved.statusColor, null);
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
   it.effect("updateTask refuses field edits on synced tasks but keeps thread links", () =>
     Effect.gen(function* () {
       const service = yield* TaskService;

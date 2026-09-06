@@ -211,46 +211,47 @@ export function TaskStatusBadgeMenu(props: {
       onClick={(event) => event.stopPropagation()}
     >
       <Menu>
-      <MenuTrigger
-        render={
-          <button
-            type="button"
-            aria-label="Change status"
-            disabled={props.busy}
-            className="cursor-pointer rounded-full outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60"
-          />
-        }
-      >
-        <TaskStatusBadge task={props.task} />
-      </MenuTrigger>
-      <MenuPopup align="start">
-        <MenuRadioGroup
-          value={currentStatusId}
-          onValueChange={(value) => {
-            if (typeof value === "string" && value !== "" && value !== currentStatusId) {
-              props.onStatusChange(value);
-            }
-          }}
+        <MenuTrigger
+          render={
+            <button
+              type="button"
+              aria-label="Change status"
+              disabled={props.busy}
+              className="cursor-pointer rounded-full outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60"
+            />
+          }
         >
-          {props.statuses.map((status) => (
-            <MenuRadioItem key={status.id} value={status.id}>
-              <span className="flex min-w-0 items-center gap-2">
-                <CheckIcon
-                  className={cn("size-3.5", status.id !== currentStatusId && "invisible")}
-                />
-                <span
-                  className="size-2 shrink-0 rounded-full"
-                  style={{
-                    backgroundColor: status.color || statusCategoryDotColors[status.category],
-                  }}
-                />
-                <span className="min-w-0 truncate">{status.label}</span>
-              </span>
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
-      </MenuPopup>
-    </Menu>
+          <TaskStatusBadge task={props.task} />
+        </MenuTrigger>
+        <MenuPopup align="start">
+          <MenuRadioGroup
+            value={currentStatusId}
+            onValueChange={(value) => {
+              if (typeof value === "string" && value !== "" && value !== currentStatusId) {
+                props.onStatusChange(value);
+              }
+            }}
+          >
+            {props.statuses.map((status) => (
+              <MenuRadioItem key={status.id} value={status.id} closeOnClick>
+                <span className="flex min-w-0 items-center gap-2">
+                  <CheckIcon
+                    className={cn("size-3.5", status.id !== currentStatusId && "invisible")}
+                  />
+                  <span
+                    className="size-2 shrink-0 rounded-full"
+                    style={{
+                      backgroundColor: status.color || statusCategoryDotColors[status.category],
+                    }}
+                  />
+                  <span className="min-w-0 truncate">{status.label}</span>
+                </span>
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+        </MenuPopup>
+      </Menu>
+    </span>
   );
 }
 
