@@ -3,6 +3,7 @@ import type {
   Task,
   TaskAttachment,
   TaskComment,
+  TaskStatus,
   TaskStatusCategory,
   ThreadId,
 } from "@t3tools/contracts";
@@ -51,7 +52,14 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuTrigger,
+} from "~/components/ui/menu";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import {
@@ -172,6 +180,77 @@ export function TaskStatusBadge({ task }: { task: Task }) {
     >
       {formatTaskStatusLabel(task)}
     </span>
+  );
+}
+
+/** Dot tint for registry statuses in the quick-change menu; custom colors win. */
+const statusCategoryDotColors: Record<TaskStatusCategory, string> = {
+  open: "#71717a",
+  in_progress: "#0ea5e9",
+  done: "#10b981",
+  blocked: "#f59e0b",
+  unknown: "#71717a",
+};
+
+/**
+ * The status chip as a quick-change menu trigger; manual tasks only, since the
+ * server refuses status edits on provider-synced tasks.
+ */
+export function TaskStatusBadgeMenu(props: {
+  task: Task;
+  statuses: ReadonlyArray<TaskStatus>;
+  busy?: boolean | undefined;
+  onStatusChange: (statusId: string) => void;
+}) {
+  const currentStatusId = props.task.statusId ?? "";
+  return (
+    <span
+      className="inline-flex"
+      // The portaled popup still bubbles clicks through the React tree; a card
+      // or row click handler above us would open the task details otherwise.
+      onClick={(event) => event.stopPropagation()}
+    >
+      <Menu>
+      <MenuTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Change status"
+            disabled={props.busy}
+            className="cursor-pointer rounded-full outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60"
+          />
+        }
+      >
+        <TaskStatusBadge task={props.task} />
+      </MenuTrigger>
+      <MenuPopup align="start">
+        <MenuRadioGroup
+          value={currentStatusId}
+          onValueChange={(value) => {
+            if (typeof value === "string" && value !== "" && value !== currentStatusId) {
+              props.onStatusChange(value);
+            }
+          }}
+        >
+          {props.statuses.map((status) => (
+            <MenuRadioItem key={status.id} value={status.id}>
+              <span className="flex min-w-0 items-center gap-2">
+                <CheckIcon
+                  className={cn("size-3.5", status.id !== currentStatusId && "invisible")}
+                />
+                <span
+                  className="size-2 shrink-0 rounded-full"
+                  style={{
+                    backgroundColor: status.color || statusCategoryDotColors[status.category],
+                  }}
+                />
+                <span className="min-w-0 truncate">{status.label}</span>
+              </span>
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </MenuPopup>
+    </Menu>
   );
 }
 
@@ -362,6 +441,12 @@ export interface TaskDetailsBodyProps {
   gitCwd?: string | undefined;
   /** Fires after a link/unlink so the owning view can refresh its copy. */
   onTaskChanged?: ((task: Task) => void) | undefined;
+  /** Status registry feeding the quick status-change menu on manual tasks. */
+  statuses?: ReadonlyArray<TaskStatus> | undefined;
+  /** Fires when the user picks a status in the quick menu; omit to hide it. */
+  onStatusChange?: ((statusId: string) => void) | undefined;
+  /** Disables the quick menu while its status change is in flight. */
+  statusChangeBusy?: boolean | undefined;
 }
 
 interface ProviderCommentThread {
@@ -847,7 +932,21 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
         <TaskDetailField
           icon={<ListTodoIcon />}
           label="Status"
-          value={<TaskStatusBadge task={task} />}
+          value={
+            task.provider === "manual" &&
+            props.onStatusChange !== undefined &&
+            props.statuses !== undefined &&
+            props.statuses.length > 0 ? (
+              <TaskStatusBadgeMenu
+                task={task}
+                statuses={props.statuses}
+                busy={props.statusChangeBusy}
+                onStatusChange={props.onStatusChange}
+              />
+            ) : (
+              <TaskStatusBadge task={task} />
+            )
+          }
         />
         <TaskDetailField
           icon={<CloudIcon />}
@@ -1158,6 +1257,10 @@ export interface TaskDetailsDialogProps {
   /** Environment + thread context enable the task-branch action. */
   environmentId?: EnvironmentId | undefined;
   busyKey: string | null;
+  /** Status registry feeding the quick status-change menu on manual tasks. */
+  statuses?: ReadonlyArray<TaskStatus> | undefined;
+  /** Fires when the user picks a status in the quick menu; omit to hide it. */
+  onStatusChange?: ((statusId: string) => void) | undefined;
   noteDraft: string;
   onNoteDraftChange: (value: string) => void;
   onAddNote: () => void;
@@ -1248,6 +1351,9 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
             environmentId={props.environmentId}
             gitCwd={gitCwd}
             onTaskChanged={setTaskOverride}
+            statuses={props.statuses}
+            onStatusChange={props.onStatusChange}
+            statusChangeBusy={props.busyKey === `task-update:${task.id}`}
           />
         </DialogPanel>
         <DialogFooter>

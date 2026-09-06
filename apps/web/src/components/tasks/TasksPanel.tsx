@@ -59,6 +59,7 @@ import {
   TaskDetailsBody,
   TaskNoteComposer,
   TaskStatusBadge,
+  TaskStatusBadgeMenu,
 } from "./TaskDetailsDialog";
 import { notifyTasksChanged, requestTaskPanelView, useTaskPanelViewRequest } from "./taskLinkStore";
 import {
@@ -149,9 +150,11 @@ interface TaskCardProps {
   task: Task;
   isCurrentThread: boolean;
   busyKey: string | null;
+  statuses: ReadonlyArray<TaskStatus>;
   onOpenDetails: (taskId: string) => void;
   onLink: (taskId: TaskId) => void;
   onUnlink: (taskId: TaskId) => void;
+  onStatusChange: (taskId: TaskId, statusId: string) => void;
 }
 
 const cardActionClassName =
@@ -178,7 +181,16 @@ function TaskCard(props: TaskCardProps) {
       className="flex h-full cursor-pointer flex-col rounded-xl border border-border/70 bg-card/80 p-3 outline-none transition hover:border-border hover:bg-accent/40 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24"
     >
       <div className="flex items-center gap-2">
-        <TaskStatusBadge task={task} />
+        {task.provider === "manual" && props.statuses.length > 0 ? (
+          <TaskStatusBadgeMenu
+            task={task}
+            statuses={props.statuses}
+            busy={props.busyKey === `task-update:${task.id}`}
+            onStatusChange={(statusId) => props.onStatusChange(task.id, statusId)}
+          />
+        ) : (
+          <TaskStatusBadge task={task} />
+        )}
         {task.provider === "manual" ? (
           <span className="rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground">
             Manual
@@ -1059,6 +1071,11 @@ export function TasksPanel(props: {
     setView("browse");
   }, []);
 
+  const backFromDetail = useCallback(() => {
+    setSelectedTaskId(null);
+    setView(viewBeforeDetailRef.current);
+  }, []);
+
   const openTaskDetail = useCallback(
     (taskId: string) => {
       if (view !== "detail") viewBeforeDetailRef.current = view;
@@ -1126,6 +1143,15 @@ export function TasksPanel(props: {
       runMutation(`task-update:${taskId}`, async (connection) => {
         await updateManualTask(connection, { taskId, ...input });
       }),
+    [runMutation],
+  );
+
+  const changeTaskStatus = useCallback(
+    (taskId: TaskId, statusId: string) => {
+      void runMutation(`task-update:${taskId}`, async (connection) => {
+        await updateManualTask(connection, { taskId, statusId });
+      });
+    },
     [runMutation],
   );
 
@@ -1218,9 +1244,11 @@ export function TasksPanel(props: {
       task={task}
       isCurrentThread={task.linkedThreadId === activeThreadId}
       busyKey={busyKey}
+      statuses={taskStatuses}
       onOpenDetails={openTaskDetail}
       onLink={setTaskLinkCurrent}
       onUnlink={setTaskLinkUnlinked}
+      onStatusChange={changeTaskStatus}
     />
   );
 
@@ -1410,10 +1438,7 @@ export function TasksPanel(props: {
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  onClick={() => {
-                    setSelectedTaskId(null);
-                    setView("tasks");
-                  }}
+                  onClick={backFromDetail}
                   aria-label="Back to tasks"
                 >
                   <ArrowLeftIcon />
@@ -1454,6 +1479,13 @@ export function TasksPanel(props: {
                   environmentId={props.environmentId}
                   gitCwd={projectCwd ?? undefined}
                   onTaskChanged={setDetailTask}
+                  statuses={taskStatuses}
+                  onStatusChange={
+                    detailTask.provider === "manual"
+                      ? (statusId) => changeTaskStatus(detailTask.id, statusId)
+                      : undefined
+                  }
+                  statusChangeBusy={busyKey === `task-update:${detailTask.id}`}
                 />
               </>
             ) : detailLoading ? (

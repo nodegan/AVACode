@@ -1,4 +1,4 @@
-import type { EnvironmentId, Task, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, Task, TaskStatus, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { SquareCheckBigIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
@@ -11,9 +11,11 @@ import { ThreadTasksDialog } from "./ThreadTasksDialog";
 import {
   addTaskNote,
   deleteTask,
+  fetchTaskStatuses,
   fetchThreadTasks,
   fetchTasksQuery,
   setTaskLinkedThread,
+  updateManualTask,
 } from "./taskApi";
 import { notifyTasksChanged, useTaskLinksByThreadId } from "./taskLinkStore";
 
@@ -39,6 +41,7 @@ export function ThreadTaskIndicator(props: {
     (state) => selectThreadRightPanelState(state.byThreadKey, threadRef).isOpen,
   );
   const [task, setTask] = useState<Task | null>(null);
+  const [taskStatuses, setTaskStatuses] = useState<ReadonlyArray<TaskStatus>>([]);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -50,6 +53,11 @@ export function ThreadTaskIndicator(props: {
       setTask(tasks[0] ?? null);
     } catch {
       setTask(null);
+    }
+    try {
+      setTaskStatuses((await fetchTaskStatuses(prepared)).statuses);
+    } catch {
+      // Without statuses the quick status menu hides; the edit dialog still works.
     }
   }, [prepared, threadId]);
 
@@ -70,6 +78,11 @@ export function ThreadTaskIndicator(props: {
         setTask(result.tasks.find((candidate) => candidate.id === taskId) ?? null);
       } catch {
         setTask(null);
+      }
+      try {
+        setTaskStatuses((await fetchTaskStatuses(prepared)).statuses);
+      } catch {
+        // Without statuses the quick status menu hides; the edit dialog still works.
       }
     },
     [isRightPanelOpen, prepared, props.onShowInPanel],
@@ -177,6 +190,16 @@ export function ThreadTaskIndicator(props: {
           activeThreadId={threadId}
           environmentId={environmentId}
           busyKey={busyKey}
+          statuses={taskStatuses}
+          onStatusChange={
+            task.provider === "manual"
+              ? (statusId) => {
+                  void runMutation(`task-update:${task.id}`, async (connection) => {
+                    await updateManualTask(connection, { taskId: task.id, statusId });
+                  });
+                }
+              : undefined
+          }
           noteDraft={noteDraft}
           onNoteDraftChange={setNoteDraft}
           onAddNote={() => {
