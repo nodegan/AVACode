@@ -125,6 +125,20 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect("uses a configured desktop entry name override for identity", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        {},
+        {
+          T3CODE_DESKTOP_ENTRY_NAME: " ava-code.desktop ",
+        },
+      );
+
+      assert.equal(environment.linuxDesktopEntryName, "ava-code.desktop");
+      assert.equal(environment.linuxWmClass, "ava-code");
+    }),
+  );
+
   it.effect("resolves picker defaults without nullish sentinels", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment();

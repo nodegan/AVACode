@@ -215,8 +215,13 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
       isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
     ),
-    linuxDesktopEntryName: isDevelopment ? "t3code-dev.desktop" : "t3code.desktop",
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
+    linuxDesktopEntryName: Option.getOrElse(config.desktopEntryNameOverride, () =>
+      isDevelopment ? "t3code-dev.desktop" : "t3code.desktop",
+    ),
+    linuxWmClass: Option.match(config.desktopEntryNameOverride, {
+      onSome: (entryName) => entryName.replace(/\.desktop$/i, ""),
+      onNone: () => (isDevelopment ? "t3code-dev" : "t3code"),
+    }),
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,

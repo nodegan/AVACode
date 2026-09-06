@@ -52,7 +52,7 @@ import { toastManager } from "../ui/toast";
 
 const GIT_GRAPH_MAX_LIMIT = 500;
 const GIT_GRAPH_LOAD_MORE_STEP = 200;
-const GIT_GRAPH_ROW_HEIGHT = 48;
+const GIT_GRAPH_ROW_HEIGHT = 56;
 const GIT_GRAPH_LANE_SPACING = 14;
 const GIT_GRAPH_LANE_COLORS = [
   "hsl(212, 85%, 56%)",
@@ -482,7 +482,7 @@ export default function GitGraphPanel({
             className="mb-1 max-w-lg rounded-lg border border-emerald-500/30 bg-emerald-500/[0.06] p-2"
             style={{ marginLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
           >
-            <p className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
               <GitBranchIcon className="size-3 shrink-0" />
               <span className="min-w-0 truncate">
                 {item.branch} ·{" "}
@@ -559,19 +559,10 @@ export default function GitGraphPanel({
               />
             </span>
             <span className="flex min-w-0 flex-1 flex-col justify-center">
-              <span
-                className="flex max-w-full min-w-0 flex-col self-start rounded-lg px-2 py-1"
-                style={
-                  isBranchTip
-                    ? {
-                        backgroundColor: `color-mix(in srgb, ${laneTint} ${item.isHead ? 16 : 10}%, transparent)`,
-                      }
-                    : undefined
-                }
-              >
+              <span className="flex max-w-full min-w-0 flex-col self-start rounded-lg px-2 py-1">
                 <span className="flex min-w-0 items-center gap-1.5">
                   {item.isHead ? (
-                    <span className="shrink-0 rounded-sm bg-foreground px-1 py-px font-mono text-[9px] font-medium tracking-wide text-background uppercase">
+                    <span className="shrink-0 rounded-sm bg-foreground px-1 py-px font-mono text-[10px] font-medium tracking-wide text-background uppercase">
                       HEAD
                     </span>
                   ) : null}
@@ -579,13 +570,22 @@ export default function GitGraphPanel({
                     <Fragment key={`${ref.kind}:${ref.name}`}>
                       <span
                         className={cn(
-                          "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium leading-none",
+                          "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs font-medium leading-none",
                           ref.kind === "local"
                             ? "border-primary/40 bg-primary/15 text-primary"
                             : ref.kind === "tag"
                               ? "border-border/70 bg-transparent text-muted-foreground"
-                              : "border-border/60 bg-muted/50 text-muted-foreground",
+                              : "border-transparent bg-transparent",
                         )}
+                        style={
+                          ref.kind === "remote"
+                            ? {
+                                borderColor: laneTint,
+                                backgroundColor: `color-mix(in srgb, ${laneTint} 12%, transparent)`,
+                                color: laneTint,
+                              }
+                            : undefined
+                        }
                       >
                         {ref.kind === "tag" ? (
                           <TagIcon className="size-3" />
@@ -605,7 +605,7 @@ export default function GitGraphPanel({
                                 type="button"
                                 title={branchTasks.map((task) => task.title).join("\n")}
                                 className={cn(
-                                  "inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-300",
+                                  "inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-xs font-medium leading-none text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-300",
                                   revealed && "ring-1 ring-current/40",
                                 )}
                                 onClick={(event) => {
@@ -638,7 +638,7 @@ export default function GitGraphPanel({
                   ))}
                   <span
                     className={cn(
-                      "min-w-0 truncate text-xs",
+                      "min-w-0 truncate text-sm",
                       isBranchTip ? "text-foreground" : "text-foreground/60",
                     )}
                   >
@@ -648,7 +648,7 @@ export default function GitGraphPanel({
               </span>
               <span
                 className={cn(
-                  "mt-0.5 flex min-w-0 items-center gap-1.5 pl-2.5 text-[11px]",
+                  "mt-0.5 flex min-w-0 items-center gap-1.5 pl-2.5 text-xs",
                   isBranchTip ? "text-muted-foreground" : "text-muted-foreground/60",
                 )}
               >

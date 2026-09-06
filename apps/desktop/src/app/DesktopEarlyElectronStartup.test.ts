@@ -86,6 +86,20 @@ describe("DesktopEarlyElectronStartup", () => {
     });
   });
 
+  it("derives the linux wm class from a configured desktop entry override", () => {
+    const options = resolveEarlyLinuxElectronOptions({
+      env: {
+        T3CODE_HOME: "/home/user/.t3-test",
+        T3CODE_DESKTOP_ENTRY_NAME: "ava-code.desktop",
+      },
+      homeDirectory: "/home/user",
+      joinPath,
+      readFileString: () => JSON.stringify({ linuxPasswordStore: "auto" }),
+    });
+
+    assert.equal(options.linuxWmClass, "ava-code");
+  });
+
   it("keeps implicit development state under ~/.t3/dev when T3CODE_HOME is unset", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: {

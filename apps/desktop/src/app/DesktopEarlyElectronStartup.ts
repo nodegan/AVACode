@@ -81,10 +81,20 @@ export function resolveEarlyLinuxElectronOptions(
 ): EarlyLinuxElectronOptions {
   const preference = resolveEarlyLinuxPasswordStorePreference(input);
   return {
-    linuxWmClass: isDevelopmentEnvironment(input.env) ? "t3code-dev" : "t3code",
+    linuxWmClass: resolveLinuxWmClass(input.env),
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,
       env: input.env,
     }),
   };
+}
+
+function resolveLinuxWmClass(env: NodeJS.ProcessEnv): string {
+  if (isDevelopmentEnvironment(env)) {
+    return "t3code-dev";
+  }
+  // Side-by-side installs claim the desktop entry they are launched with so
+  // their windows icon and group separately from the packaged app.
+  const entryNameOverride = trimNonEmpty(env.T3CODE_DESKTOP_ENTRY_NAME);
+  return entryNameOverride ? entryNameOverride.replace(/\.desktop$/i, "") : "t3code";
 }
