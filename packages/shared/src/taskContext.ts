@@ -11,6 +11,9 @@ const TASK_CONTEXT_MAX_ENTRIES = 20;
 const TASK_CONTEXT_MAX_BODY_CHARS = 500;
 
 export function taskStatusLabel(task: Task): string {
+  // Manual status labels come from the user's own registry, so show them as
+  // picked; provider labels are normalized to the category's plain word.
+  if (task.provider === "manual") return task.statusLabel;
   switch (task.statusCategory) {
     case "done":
       return "Done";

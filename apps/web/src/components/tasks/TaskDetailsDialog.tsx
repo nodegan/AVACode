@@ -21,6 +21,7 @@ import {
   MessageSquarePlusIcon,
   PanelRightIcon,
   PaperclipIcon,
+  PencilIcon,
   SquareCheckBigIcon,
   Trash2Icon,
   UnlinkIcon,
@@ -70,6 +71,9 @@ export function statusTone(status: TaskStatusCategory): string {
 }
 
 export function formatTaskStatusLabel(task: Task): string {
+  // Manual status labels come from the user's own registry, so show them as
+  // picked; provider labels are normalized to the category's plain word.
+  if (task.provider === "manual") return task.statusLabel;
   switch (task.statusCategory) {
     case "done":
       return "Done";
@@ -670,6 +674,8 @@ export interface TaskDetailsActionsProps {
   environmentId?: EnvironmentId | undefined;
   busyKey: string | null;
   onDelete?: (() => void) | undefined;
+  /** Only handed to manual tasks; synced tasks are edited at their provider. */
+  onEdit?: (() => void) | undefined;
   onLink?: (() => void) | undefined;
   onUnlink?: (() => void) | undefined;
   onCreateThread?: (() => void) | undefined;
@@ -742,8 +748,9 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
   const showBranch = environmentId !== undefined && props.activeThreadId !== null;
   const showUnlink = linkedThreadId !== null && props.onUnlink !== undefined;
   const showDelete = props.onDelete !== undefined && task.provider === "manual";
+  const showEdit = props.onEdit !== undefined && task.provider === "manual";
   const showOpenExternal = task.externalUrl !== null;
-  const showOverflow = showUnlink || showDelete || showOpenExternal;
+  const showOverflow = showUnlink || showDelete || showEdit || showOpenExternal;
 
   return (
     <div className="flex items-center gap-0.5">
@@ -796,6 +803,12 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
                   Unlink from thread
                 </MenuItem>
               ) : null}
+              {showEdit ? (
+                <MenuItem onClick={props.onEdit}>
+                  <PencilIcon />
+                  Edit task
+                </MenuItem>
+              ) : null}
               {showDelete ? (
                 <MenuItem
                   variant="destructive"
@@ -826,6 +839,7 @@ export interface TaskDetailsDialogProps {
   /** Moves the detail view into the tasks panel; the dialog closes. */
   onShowInPanel?: (() => void) | undefined;
   onDelete?: (() => void) | undefined;
+  onEdit?: (() => void) | undefined;
   onLink?: (() => void) | undefined;
   onUnlink?: (() => void) | undefined;
   onCreateThread?: (() => void) | undefined;
@@ -841,6 +855,7 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
     props.onUnlink !== undefined ||
     props.onCreateThread !== undefined ||
     props.onDelete !== undefined ||
+    props.onEdit !== undefined ||
     task.externalUrl !== null;
 
   return (
@@ -857,6 +872,7 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
                   environmentId={props.environmentId}
                   busyKey={props.busyKey}
                   onDelete={props.onDelete}
+                  onEdit={props.onEdit}
                   onLink={props.onLink}
                   onUnlink={props.onUnlink}
                   onCreateThread={props.onCreateThread}

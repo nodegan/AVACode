@@ -51,6 +51,7 @@ import {
   fetchTasksQuery,
   setTaskLinkedThread,
   syncProviderTasks,
+  updateManualTask,
 } from "./taskApi";
 import { deleteTask as deleteTaskRequest } from "./taskApi";
 import {
@@ -65,6 +66,7 @@ import {
   CreateListDialog,
   CreateTaskDialog,
   DeleteTreeItemDialog,
+  EditTaskDialog,
   type TaskListOptionGroup,
   type TaskTreeDeleteTarget,
 } from "./TaskDialogs";
@@ -384,6 +386,7 @@ export function TasksPanel(props: {
   const [page, setPage] = useState(1);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [createTaskOpen, setCreateTaskOpen] = useState(false);
+  const [editTaskOpen, setEditTaskOpen] = useState(false);
   const [createListOpen, setCreateListOpen] = useState(false);
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TaskTreeDeleteTarget | null>(null);
@@ -1109,6 +1112,14 @@ export function TasksPanel(props: {
     [runMutation],
   );
 
+  const submitEditTask = useCallback(
+    (taskId: TaskId, input: { title: string; description?: string; statusId?: string }) =>
+      runMutation(`task-update:${taskId}`, async (connection) => {
+        await updateManualTask(connection, { taskId, ...input });
+      }),
+    [runMutation],
+  );
+
   const submitCreateList = useCallback(
     (input: { name: string; folderId?: string }) =>
       runMutation("list-create", async (connection) => {
@@ -1211,6 +1222,7 @@ export function TasksPanel(props: {
       environmentId={props.environmentId}
       busyKey={busyKey}
       onDelete={() => deleteTask(task.id)}
+      onEdit={task.provider === "manual" ? () => setEditTaskOpen(true) : undefined}
       onLink={() => setTaskLink(task.id, activeThreadId)}
       onUnlink={() => setTaskLink(task.id, null)}
       onCreateThread={() => requestCreateThread(task)}
@@ -1451,6 +1463,16 @@ export function TasksPanel(props: {
               onAddNote={() => addNote(detailTask.id)}
             />
           </div>
+        ) : null}
+        {detailTask && detailTask.provider === "manual" ? (
+          <EditTaskDialog
+            task={detailTask}
+            open={editTaskOpen}
+            onOpenChange={setEditTaskOpen}
+            statuses={taskStatuses}
+            busy={busyKey === `task-update:${detailTask.id}`}
+            onSubmit={(input) => submitEditTask(detailTask.id, input)}
+          />
         ) : null}
       </div>
     );

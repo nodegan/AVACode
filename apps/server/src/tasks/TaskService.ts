@@ -209,6 +209,7 @@ function mapTaskRow(row: TaskRow, notes: ReadonlyArray<TaskNote>): Task {
     statusLabel: row.statusLabel,
     statusCategory: row.statusCategory,
     statusColor: row.statusColor,
+    statusId: row.statusId,
     linkedThreadId: row.linkedThreadId,
     listId: row.listId,
     listName: row.listName,
@@ -967,19 +968,34 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /**
+   * Field edits belong to manual tasks; synced rows are the provider's copy.
+   * Thread links are a local association, so they stay settable on any task.
+   */
   const updateTask: TaskService["Service"]["updateTask"] = (input) =>
     Effect.gen(function* () {
       const current = yield* loadTaskRowById(input.taskId);
+      const editsTaskFields =
+        input.title !== undefined ||
+        input.description !== undefined ||
+        input.statusId !== undefined;
+      if (current.provider !== MANUAL_TASK_PROVIDER && editsTaskFields) {
+        return yield* taskServiceError(
+          "tasks.updateTask",
+          "Only manual tasks can be edited; synced tasks are managed by their provider.",
+        );
+      }
+      const status = input.statusId === undefined ? null : yield* loadStatusRowById(input.statusId);
       const updatedAt = yield* nowIso();
       yield* upsertTaskRow({
         id: current.id,
         provider: current.provider,
         title: input.title ?? current.title,
         description: input.description ?? current.description,
-        statusLabel: input.statusLabel ?? current.statusLabel,
-        statusCategory: input.statusCategory ?? current.statusCategory,
-        statusColor: current.statusColor,
-        statusId: current.statusId,
+        statusLabel: status?.label ?? current.statusLabel,
+        statusCategory: status?.category ?? current.statusCategory,
+        statusColor: status?.color ?? current.statusColor,
+        statusId: status?.id ?? current.statusId,
         linkedThreadId:
           input.linkedThreadId !== undefined ? input.linkedThreadId : current.linkedThreadId,
         listId: current.listId,

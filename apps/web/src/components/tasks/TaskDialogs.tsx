@@ -1,4 +1,4 @@
-import type { TaskListFacet, TaskStatus } from "@t3tools/contracts";
+import type { Task, TaskListFacet, TaskStatus } from "@t3tools/contracts";
 import { Loader2Icon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -201,6 +201,110 @@ export function CreateTaskDialog(props: {
             onValueChange={(value) => typeof value === "string" && setStatusId(value)}
           >
             <SelectTrigger id="create-task-status" aria-label="Starting status">
+              <SelectValue>
+                {props.statuses.find((status) => status.id === statusId)?.label ?? "Default"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              {props.statuses.map((status) => (
+                <SelectItem key={status.id} value={status.id}>
+                  {status.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
+    </DialogChrome>
+  );
+}
+
+export function EditTaskDialog(props: {
+  task: Task;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The settings-managed statuses a manual task can move between. */
+  statuses: ReadonlyArray<TaskStatus>;
+  busy: boolean;
+  onSubmit: (input: { title: string; description?: string; statusId?: string }) => Promise<boolean>;
+}) {
+  const [title, setTitle] = useState(props.task.title);
+  const [description, setDescription] = useState(props.task.description);
+  const [statusId, setStatusId] = useState<string>(props.task.statusId ?? "");
+  const submittingRef = useRef(false);
+  // Seed from the task at open time only: the panel's poll swaps in a fresh
+  // task object every few seconds, and re-running off it would wipe edits.
+  const taskRef = useRef(props.task);
+  taskRef.current = props.task;
+
+  useEffect(() => {
+    if (props.open) {
+      setTitle(taskRef.current.title);
+      setDescription(taskRef.current.description);
+      setStatusId(taskRef.current.statusId ?? "");
+    }
+  }, [props.open]);
+
+  const submit = async () => {
+    if (submittingRef.current) return;
+    const trimmed = title.trim();
+    if (trimmed.length === 0 || props.busy) return;
+    submittingRef.current = true;
+    try {
+      const edited = await props.onSubmit({
+        title: trimmed,
+        description: description.trim(),
+        ...(statusId !== "" ? { statusId } : {}),
+      });
+      if (edited) props.onOpenChange(false);
+    } finally {
+      submittingRef.current = false;
+    }
+  };
+
+  return (
+    <DialogChrome
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      title="Edit task"
+      description="Edits stay local. Provider-synced tasks keep their source of truth."
+      submitLabel="Save changes"
+      submitBusyLabel="Saving…"
+      busy={props.busy}
+      canSubmit={title.trim().length > 0}
+      onSubmit={() => void submit()}
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="edit-task-title">Title</Label>
+        <Input
+          id="edit-task-title"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void submit();
+          }}
+          placeholder="What needs doing?"
+          autoFocus
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="edit-task-description">Description</Label>
+        <Textarea
+          id="edit-task-description"
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+          placeholder="Optional details, acceptance criteria, links…"
+          rows={4}
+        />
+      </div>
+      {props.statuses.length > 0 ? (
+        <div className="space-y-1.5">
+          <Label htmlFor="edit-task-status">Status</Label>
+          <Select
+            value={statusId}
+            onValueChange={(value) => typeof value === "string" && setStatusId(value)}
+          >
+            <SelectTrigger id="edit-task-status" aria-label="Status">
               <SelectValue>
                 {props.statuses.find((status) => status.id === statusId)?.label ?? "Default"}
               </SelectValue>

@@ -20,6 +20,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     statusLabel: "In Progress",
     statusCategory: "in_progress",
     statusColor: null,
+    statusId: null,
     linkedThreadId: ThreadId.make("thread-1"),
     listId: null,
     listName: null,
@@ -64,7 +65,8 @@ describe("TaskTurnContext", () => {
       [
         "## Task: Fix login redirect",
         "",
-        "Status: In progress",
+        // Manual tasks carry the registry label the user picked.
+        "Status: In Progress",
         "",
         "Users land on the home screen after SSO.",
       ].join("\n"),

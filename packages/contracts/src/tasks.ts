@@ -157,6 +157,8 @@ export const Task = Schema.Struct({
   statusColor: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** The registry status this task attaches to; null for provider-synced tasks. */
+  statusId: Schema.NullOr(TaskStatusId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   linkedThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** The list this task sits in; local ids because lists are first-class. */
   listId: Schema.NullOr(TrimmedNonEmptyString).pipe(
@@ -341,8 +343,8 @@ export const UpdateTaskInput = Schema.Struct({
   taskId: TaskId,
   title: Schema.optional(TrimmedNonEmptyString),
   description: Schema.optional(TrimmedString),
-  statusLabel: Schema.optional(TrimmedNonEmptyString),
-  statusCategory: Schema.optional(TaskStatusCategory),
+  /** A status from the settings registry; edits the attached task's status. */
+  statusId: Schema.optional(TaskStatusId),
   linkedThreadId: Schema.optional(Schema.NullOr(ThreadId)),
 });
 export type UpdateTaskInput = typeof UpdateTaskInput.Type;

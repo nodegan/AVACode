@@ -916,6 +916,96 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
       assert.strictEqual(unknown._tag, "Failure");
     }).pipe(Effect.provide(TestLayers)),
   );
+
+  it.effect("updateTask edits a manual task's title, description, and status", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskService;
+      const task = yield* service.createManualTask({
+        title: "First draft",
+        description: "Initial notes.",
+      });
+      const statuses = yield* service.listStatuses();
+      const done = statuses.statuses.find((status) => status.category === "done");
+      assert.ok(done);
+
+      const edited = yield* service.updateTask({
+        taskId: task.id,
+        title: "Renamed task",
+        description: "",
+        statusId: done.id,
+      });
+      assert.strictEqual(edited.title, "Renamed task");
+      assert.strictEqual(edited.description, "");
+      assert.strictEqual(edited.statusLabel, done.label);
+      assert.strictEqual(edited.statusCategory, "done");
+      assert.strictEqual(edited.statusId, done.id);
+
+      const after = yield* service.queryTasks({ filter: { taskIds: [task.id] } });
+      assert.strictEqual(after.tasks[0]?.title, "Renamed task");
+      assert.strictEqual(after.tasks[0]?.statusCategory, "done");
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("updateTask refuses field edits on synced tasks but keeps thread links", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskService;
+      yield* seedTasks([
+        {
+          title: "Synced",
+          listId: "list-a",
+          listName: "Alpha",
+        },
+      ]);
+      const syncedId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${"0".repeat(12)}`);
+      const statuses = yield* service.listStatuses();
+      const done = statuses.statuses.find((status) => status.category === "done");
+      assert.ok(done);
+
+      const titleEdit = yield* Effect.result(
+        service.updateTask({ taskId: syncedId, title: "Hijacked" }),
+      );
+      assert.strictEqual(titleEdit._tag, "Failure");
+      const statusEdit = yield* Effect.result(
+        service.updateTask({ taskId: syncedId, statusId: done.id }),
+      );
+      assert.strictEqual(statusEdit._tag, "Failure");
+      const descriptionEdit = yield* Effect.result(
+        service.updateTask({ taskId: syncedId, description: "Hijacked" }),
+      );
+      assert.strictEqual(descriptionEdit._tag, "Failure");
+
+      const linked = yield* service.updateTask({
+        taskId: syncedId,
+        linkedThreadId: ThreadId.make("thread-1"),
+      });
+      assert.strictEqual(linked.linkedThreadId, "thread-1");
+      assert.strictEqual(linked.title, "Synced");
+
+      const after = yield* service.queryTasks({ filter: { taskIds: [syncedId] } });
+      assert.strictEqual(after.tasks[0]?.title, "Synced");
+      assert.strictEqual(after.tasks[0]?.statusCategory, "open");
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("updateTask rejects unknown statuses and missing tasks", () =>
+    Effect.gen(function* () {
+      const service = yield* TaskService;
+      const task = yield* service.createManualTask({ title: "Real task" });
+
+      const unknownStatus = yield* Effect.result(
+        service.updateTask({ taskId: task.id, statusId: TaskStatusId.make("status:missing") }),
+      );
+      assert.strictEqual(unknownStatus._tag, "Failure");
+
+      const unknownTask = yield* Effect.result(
+        service.updateTask({
+          taskId: TaskId.make("aaaaaaaa-aaaa-4aaa-8aaa-999999999999"),
+          title: "Ghost",
+        }),
+      );
+      assert.strictEqual(unknownTask._tag, "Failure");
+    }).pipe(Effect.provide(TestLayers)),
+  );
 });
 
 it.live("getProviderStatus reports account, last sync, and last error", () =>

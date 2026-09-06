@@ -194,6 +194,25 @@ export async function setTaskLinkedThread(
   );
 }
 
+/** Edits a manual task's fields; the server refuses field edits on synced tasks. */
+export async function updateManualTask(
+  prepared: PreparedConnection,
+  input: { taskId: TaskId; title?: string; description?: string; statusId?: string },
+): Promise<Task> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/task");
+  return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.updateTask({
+      headers,
+      payload: {
+        taskId: input.taskId,
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.statusId !== undefined ? { statusId: TaskStatusId.make(input.statusId) } : {}),
+      },
+    }),
+  );
+}
+
 export async function addTaskNote(
   prepared: PreparedConnection,
   taskId: TaskId,
