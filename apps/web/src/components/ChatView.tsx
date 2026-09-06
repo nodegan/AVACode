@@ -129,6 +129,7 @@ import {
   type RightPanelSurface,
   useRightPanelStore,
 } from "../rightPanelStore";
+import { requestTaskPanelView } from "./tasks/taskLinkStore";
 import {
   isPreviewSupportedInRuntime,
   setActivePreviewTab,
@@ -410,6 +411,7 @@ const PreviewPanel = lazy(() =>
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
+const GitGraphPanel = lazy(() => import("./gitGraph/GitGraphPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
@@ -3165,6 +3167,41 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "tasks");
   }, [activeProject, activeThreadRef]);
+  const addGitGraphSurface = useCallback(() => {
+    if (!activeThreadRef || !isServerThread || !isGitRepo) return;
+    useRightPanelStore.getState().open(activeThreadRef, "git-graph");
+  }, [activeThreadRef, isGitRepo, isServerThread]);
+  const openCommitFileDiff = useCallback(
+    (oid: string, filePath: string) => {
+      if (!activeThreadRef || !isServerThread || !isGitRepo) return;
+      useDiffPanelStore.getState().selectCommit(activeThreadRef, oid, filePath);
+      useRightPanelStore.getState().open(activeThreadRef, "diff");
+      onDiffPanelOpen?.();
+    },
+    [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen],
+  );
+  const handleGraphBranchRenamed = useCallback(
+    (newBranch: string) => {
+      if (!activeThreadRef || !activeThread) return;
+      void updateThreadMetadata({
+        environmentId: activeThreadRef.environmentId,
+        input: {
+          threadId: activeThread.id,
+          branch: newBranch,
+          worktreePath: activeThread.worktreePath,
+        },
+      });
+    },
+    [activeThread, activeThreadRef, updateThreadMetadata],
+  );
+  const handleGraphOpenTask = useCallback(
+    (taskId: string) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().open(activeThreadRef, "tasks");
+      requestTaskPanelView(activeThreadRef.environmentId, taskId);
+    },
+    [activeThreadRef],
+  );
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
@@ -5953,6 +5990,22 @@ function ChatViewContent(props: ChatViewProps) {
         projectId={activeProject.id}
         activeThread={activeThread}
       />
+    ) : activeRightPanelSurface?.kind === "git-graph" &&
+      activeProject &&
+      isServerThread &&
+      isGitRepo &&
+      gitStatusCwd ? (
+      <Suspense fallback={null}>
+        <GitGraphPanel
+          key={`${activeThreadKey}:${gitStatusCwd}`}
+          environmentId={activeThreadRef?.environmentId ?? activeProject.environmentId}
+          cwd={gitStatusCwd}
+          currentRefName={gitStatusQuery.data?.refName ?? null}
+          onOpenCommitFile={openCommitFileDiff}
+          onCurrentBranchRenamed={handleGraphBranchRenamed}
+          onOpenTask={handleGraphOpenTask}
+        />
+      </Suspense>
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (
@@ -6388,9 +6441,11 @@ function ChatViewContent(props: ChatViewProps) {
           onAddFiles={addFilesSurface}
           onAddAgents={addAgentsSurface}
           onAddTasks={addTasksSurface}
+          onAddGitGraph={addGitGraphSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          gitGraphAvailable={isServerThread && isGitRepo}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -6417,9 +6472,11 @@ function ChatViewContent(props: ChatViewProps) {
             onAddFiles={addFilesSurface}
             onAddAgents={addAgentsSurface}
             onAddTasks={addTasksSurface}
+            onAddGitGraph={addGitGraphSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            gitGraphAvailable={isServerThread && isGitRepo}
           >
             {rightPanelContent}
           </RightPanelTabs>

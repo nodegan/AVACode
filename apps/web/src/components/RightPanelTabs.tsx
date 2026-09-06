@@ -1,6 +1,16 @@
 import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
-import { Bot, FileDiff, Files, Globe2, ListTodo, Plus, TerminalSquare, X } from "lucide-react";
+import {
+  Bot,
+  FileDiff,
+  Files,
+  GitGraph,
+  Globe2,
+  ListTodo,
+  Plus,
+  TerminalSquare,
+  X,
+} from "lucide-react";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -46,9 +56,11 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddAgents: () => void;
   onAddTasks: () => void;
+  onAddGitGraph: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  gitGraphAvailable: boolean;
   children: ReactNode;
 }
 
@@ -56,6 +68,7 @@ const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the AVA Code desktop app.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
+  "git-graph": "Git graph is only available for server threads in Git repositories.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
@@ -95,9 +108,11 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddAgents: () => void;
   onAddTasks: () => void;
+  onAddGitGraph: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  gitGraphAvailable: boolean;
 }) {
   const actions = [
     {
@@ -147,6 +162,14 @@ function RightPanelEmptyState(props: {
       available: true,
       disabledReason: null,
       onClick: props.onAddAgents,
+    },
+    {
+      label: "Git graph",
+      description: "Browse the commit history of this project.",
+      icon: GitGraph,
+      available: props.gitGraphAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS["git-graph"],
+      onClick: props.onAddGitGraph,
     },
   ] as const;
 
@@ -218,6 +241,8 @@ function surfaceTitle(
       return "Files";
     case "tasks":
       return "Tasks";
+    case "git-graph":
+      return "Git graph";
     case "file":
       return surface.relativePath.slice(surface.relativePath.lastIndexOf("/") + 1);
     case "terminal":
@@ -277,6 +302,8 @@ function SurfaceIcon({
       return <Files className="size-3 shrink-0" />;
     case "tasks":
       return <ListTodo className="size-3 shrink-0" />;
+    case "git-graph":
+      return <GitGraph className="size-3 shrink-0" />;
     case "file":
       return (
         <PierreEntryIcon
@@ -502,6 +529,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <ListTodo />
                     Tasks
                   </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.gitGraphAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS["git-graph"]}
+                    onClick={props.onAddGitGraph}
+                  >
+                    <GitGraph />
+                    Git graph
+                  </SurfaceMenuItem>
                 </MenuPopup>
               </Menu>
             ) : null}
@@ -518,9 +553,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddAgents={props.onAddAgents}
             onAddTasks={props.onAddTasks}
+            onAddGitGraph={props.onAddGitGraph}
             browserAvailable={props.browserAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
+            gitGraphAvailable={props.gitGraphAvailable}
           />
         ) : (
           props.children

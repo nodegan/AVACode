@@ -63,6 +63,7 @@ import Migration0047 from "./Migrations/047_TaskNotes.ts";
 import Migration0048 from "./Migrations/048_TaskNotesHealColumn.ts";
 import Migration0049 from "./Migrations/049_TaskProviderHierarchy.ts";
 import Migration0050 from "./Migrations/050_TaskStatuses.ts";
+import Migration0051 from "./Migrations/051_TaskLinkedBranches.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -125,6 +126,7 @@ export const migrationEntries = [
   [48, "TaskNotesHealColumn", Migration0048],
   [49, "TaskProviderHierarchy", Migration0049],
   [50, "TaskStatuses", Migration0050],
+  [51, "TaskLinkedBranches", Migration0051],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

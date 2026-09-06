@@ -75,8 +75,20 @@ function createTaskLinksStore() {
 
 const taskLinksStore = createTaskLinksStore();
 
+let changeVersion = 0;
+
 export function notifyTasksChanged(environmentId?: EnvironmentId) {
+  changeVersion += 1;
   taskLinksStore.refresh(environmentId);
+}
+
+/**
+ * Monotonic counter that bumps whenever any surface mutates a task, so other
+ * surfaces (the git graph) can refetch instantly instead of waiting for their
+ * own poll.
+ */
+export function useTaskLinksChangedVersion(): number {
+  return useSyncExternalStore(taskLinksStore.subscribe, () => changeVersion);
 }
 
 function useTaskLinksStoreState(environmentId: EnvironmentId): TaskLinksState {

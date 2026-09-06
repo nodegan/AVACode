@@ -305,47 +305,48 @@ function NavTreeRow(props: {
   active?: boolean;
   trailing?: ReactNode;
   /**
-   * Hover-revealed row actions. They take the trailing slot's place on the
-   * right, so the counter stays clear of them; the trailing chevron is
-   * dropped on such rows (the folder icon carries the expanded state).
+   * Hover-revealed row actions. They overlay the far right on hover; the
+   * counter stays next to the name, and the trailing chevron is dropped on
+   * such rows (the folder icon carries the expanded state).
    */
   actions?: ReactNode;
   onClick: () => void;
 }) {
-  const row = (
-    <button
-      type="button"
-      onClick={props.onClick}
-      className={cn(
-        "flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pl-2 pr-2 text-left text-sm transition",
-        props.actions && "pr-11",
-        props.active
-          ? "bg-accent text-foreground"
-          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-      )}
-    >
-      <span
-        className={cn(
-          "shrink-0 [&_svg]:size-4",
-          props.active ? "text-foreground" : "text-muted-foreground/80",
-        )}
-      >
-        {props.icon}
-      </span>
-      <span className="min-w-0 flex-1 truncate">{props.label}</span>
-      {typeof props.count === "number" ? (
-        <span className="shrink-0 text-xs tabular-nums opacity-60">{props.count}</span>
-      ) : null}
-      {props.actions ? null : props.trailing}
-    </button>
-  );
-  if (!props.actions) return row;
   return (
     <div className="group/row relative flex w-full items-center">
-      {row}
-      <div className="pointer-events-none absolute inset-y-0 right-1 flex items-center opacity-0 transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100">
-        {props.actions}
-      </div>
+      <button
+        type="button"
+        onClick={props.onClick}
+        className={cn(
+          "flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5 pl-2 pr-2 text-left text-sm transition",
+          props.actions && "pr-11",
+          props.active
+            ? "bg-accent text-foreground"
+            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+        )}
+      >
+        <span
+          className={cn(
+            "shrink-0 [&_svg]:size-4",
+            props.active ? "text-foreground" : "text-muted-foreground/80",
+          )}
+        >
+          {props.icon}
+        </span>
+        <span className="min-w-0 truncate">{props.label}</span>
+        {typeof props.count === "number" ? (
+          <span className="shrink-0 text-xs tabular-nums opacity-60">{props.count}</span>
+        ) : null}
+        {/* The spacer keeps the counter next to the name while the hover
+            region and the trailing chevron still reach the far edge. */}
+        <span className="min-w-2 flex-1" />
+        {props.actions ? null : props.trailing}
+      </button>
+      {props.actions ? (
+        <div className="pointer-events-none absolute inset-y-0 right-1 flex items-center opacity-0 transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100">
+          {props.actions}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -844,6 +845,10 @@ export function TasksPanel(props: {
 
   const facets = panel?.facets ?? null;
   const totalTasks = tasksResult?.total ?? 0;
+  const projectCwd = useMemo(
+    () => projects.find((project) => project.id === projectId)?.workspaceRoot ?? null,
+    [projects, projectId],
+  );
   const totalPages = Math.max(1, Math.ceil(totalTasks / TASKS_PAGE_SIZE));
   const anyTasks = (facets?.statuses ?? []).some((facet) => facet.count > 0);
 
@@ -1440,7 +1445,12 @@ export function TasksPanel(props: {
             {detailTask ? (
               <>
                 <h2 className="wrap-break-word text-base font-semibold">{detailTask.title}</h2>
-                <TaskDetailsBody task={detailTask} environmentId={props.environmentId} />
+                <TaskDetailsBody
+                  task={detailTask}
+                  environmentId={props.environmentId}
+                  gitCwd={projectCwd ?? undefined}
+                  onTaskChanged={setDetailTask}
+                />
               </>
             ) : detailLoading ? (
               <div className="flex justify-center py-6">

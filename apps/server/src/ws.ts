@@ -1866,6 +1866,33 @@ const makeWsRpcLayer = (
             gitWorkflow.switchRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
+        [WS_METHODS.vcsRenameBranch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsRenameBranch,
+            gitWorkflow.renameBranch(input).pipe(
+              Effect.map((renamed) => ({ refName: renamed.branch })),
+              Effect.tap(() => refreshGitStatus(input.cwd)),
+            ),
+            { "rpc.aggregate": "vcs" },
+          ),
+        [WS_METHODS.vcsDeleteRef]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsDeleteRef,
+            gitWorkflow.deleteRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "vcs" },
+          ),
+        [WS_METHODS.gitGraphLog]: (input) =>
+          observeRpcEffect(WS_METHODS.gitGraphLog, gitWorkflow.gitGraphLog(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.gitGraphCommitFiles]: (input) =>
+          observeRpcEffect(WS_METHODS.gitGraphCommitFiles, gitWorkflow.gitGraphCommitFiles(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.gitGraphCommitDiff]: (input) =>
+          observeRpcEffect(WS_METHODS.gitGraphCommitDiff, gitWorkflow.gitGraphCommitDiff(input), {
+            "rpc.aggregate": "vcs",
+          }),
         [WS_METHODS.vcsInit]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsInit,

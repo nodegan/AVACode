@@ -160,6 +160,10 @@ export const Task = Schema.Struct({
   /** The registry status this task attaches to; null for provider-synced tasks. */
   statusId: Schema.NullOr(TaskStatusId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   linkedThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** Local branch names the user linked to this task; advisory, name-matched per repo. */
+  linkedBranches: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   /** The list this task sits in; local ids because lists are first-class. */
   listId: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -272,6 +276,8 @@ export const TaskQueryFilter = Schema.Struct({
   statuses: Schema.optional(Schema.Array(TaskStatusCategory)),
   assignees: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   linkedThreadId: Schema.optional(ThreadId),
+  /** Tasks carrying this branch name in their linked-branch set. */
+  linkedBranchName: Schema.optional(TrimmedNonEmptyString),
   /** Free-text search over title and provider ids (ClickUp custom id, external id). */
   query: Schema.optional(TrimmedString),
   page: Schema.optional(Schema.Number),
@@ -346,6 +352,8 @@ export const UpdateTaskInput = Schema.Struct({
   /** A status from the settings registry; edits the attached task's status. */
   statusId: Schema.optional(TaskStatusId),
   linkedThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  /** Replaces the linked-branch set; an empty array unlinks everything. */
+  linkedBranches: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type UpdateTaskInput = typeof UpdateTaskInput.Type;
 

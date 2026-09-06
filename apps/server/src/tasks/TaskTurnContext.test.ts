@@ -22,6 +22,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     statusColor: null,
     statusId: null,
     linkedThreadId: ThreadId.make("thread-1"),
+    linkedBranches: [],
     listId: null,
     listName: null,
     externalTaskId: null,

@@ -13,12 +13,20 @@ import {
   type VcsCreateWorktreeResult,
   type VcsListRefsInput,
   type VcsListRefsResult,
+  type GitGraphCommitDiffInput,
+  type GitGraphCommitDiffResult,
+  type GitGraphCommitFilesInput,
+  type GitGraphCommitFilesResult,
+  type GitGraphLogInput,
+  type GitGraphLogResult,
   type GitManagerServiceError,
   type GitPreparePullRequestThreadInput,
   type GitPreparePullRequestThreadResult,
   type GitPullRequestRefInput,
   type VcsPullResult,
   type VcsRemoveWorktreeInput,
+  type VcsDeleteRefInput,
+  type VcsDeleteRefResult,
   type GitResolvePullRequestResult,
   type GitRunStackedActionInput,
   type GitRunStackedActionResult,
@@ -95,6 +103,18 @@ export class GitWorkflowService extends Context.Service<
       readonly oldBranch: string;
       readonly newBranch: string;
     }) => Effect.Effect<{ readonly branch: string }, GitManagerServiceError>;
+    readonly deleteRef: (
+      input: VcsDeleteRefInput,
+    ) => Effect.Effect<VcsDeleteRefResult, GitCommandError>;
+    readonly gitGraphLog: (
+      input: GitGraphLogInput,
+    ) => Effect.Effect<GitGraphLogResult, GitCommandError>;
+    readonly gitGraphCommitFiles: (
+      input: GitGraphCommitFilesInput,
+    ) => Effect.Effect<GitGraphCommitFilesResult, GitCommandError>;
+    readonly gitGraphCommitDiff: (
+      input: GitGraphCommitDiffInput,
+    ) => Effect.Effect<GitGraphCommitDiffResult, GitCommandError>;
   }
 >()("t3/git/GitWorkflowService") {}
 
@@ -330,6 +350,34 @@ export const make = Effect.gen(function* () {
     renameBranch: (input) =>
       ensureGit("GitWorkflowService.renameBranch", input.cwd).pipe(
         Effect.andThen(git.renameBranch(input)),
+      ),
+    deleteRef: (input) =>
+      ensureGitCommand("GitWorkflowService.deleteRef", input.cwd).pipe(
+        Effect.andThen(git.deleteRef(input)),
+      ),
+    gitGraphLog: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.gitGraphLog", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository
+            ? git.gitGraphLog(input)
+            : Effect.succeed({ isRepo: false, commits: [], headOid: null, nextCursor: null }),
+        ),
+      ),
+    gitGraphCommitFiles: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.gitGraphCommitFiles", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository
+            ? git.gitGraphCommitFiles(input)
+            : Effect.succeed({ isRepo: false, files: [] }),
+        ),
+      ),
+    gitGraphCommitDiff: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.gitGraphCommitDiff", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository
+            ? git.gitGraphCommitDiff(input)
+            : Effect.succeed({ isRepo: false, diff: "", truncated: false }),
+        ),
       ),
   });
 });

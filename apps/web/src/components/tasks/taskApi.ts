@@ -194,6 +194,21 @@ export async function setTaskLinkedThread(
   );
 }
 
+/** Replaces the task's linked-branch set; branch names match per repo by name. */
+export async function setTaskLinkedBranches(
+  prepared: PreparedConnection,
+  taskId: TaskId,
+  branchNames: ReadonlyArray<string>,
+): Promise<Task> {
+  const requestUrl = environmentEndpointUrl(prepared.httpBaseUrl, "/api/tasks/task");
+  return runTasksRequest(prepared, requestUrl, "POST", (client, headers) =>
+    client.tasks.updateTask({
+      headers,
+      payload: { taskId, linkedBranches: [...branchNames] },
+    }),
+  );
+}
+
 /** Edits a manual task's fields; the server refuses field edits on synced tasks. */
 export async function updateManualTask(
   prepared: PreparedConnection,

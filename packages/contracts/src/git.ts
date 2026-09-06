@@ -5,6 +5,7 @@ import { VcsDriverKind } from "./vcs.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const GIT_LIST_BRANCHES_MAX_LIMIT = 200;
+const GIT_GRAPH_LOG_MAX_LIMIT = 500;
 
 // Domain Types
 
@@ -97,6 +98,22 @@ const GitResolvedPullRequest = Schema.Struct({
 });
 export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
 
+export const GitGraphRef = Schema.Struct({
+  name: TrimmedNonEmptyStringSchema,
+  kind: Schema.Literals(["local", "remote", "tag"]),
+});
+export type GitGraphRef = typeof GitGraphRef.Type;
+
+export const GitGraphCommit = Schema.Struct({
+  oid: TrimmedNonEmptyStringSchema,
+  parents: Schema.Array(TrimmedNonEmptyStringSchema),
+  refs: Schema.Array(GitGraphRef),
+  authorName: Schema.String,
+  timestamp: NonNegativeInt,
+  subject: Schema.String,
+});
+export type GitGraphCommit = typeof GitGraphCommit.Type;
+
 // RPC Inputs
 
 export const VcsStatusInput = Schema.Struct({
@@ -168,6 +185,7 @@ export const VcsCreateRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,
   switchRef: Schema.optional(Schema.Boolean),
+  startPoint: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type VcsCreateRefInput = typeof VcsCreateRefInput.Type;
 
@@ -319,6 +337,89 @@ export const VcsPullResult = Schema.Struct({
   upstreamRef: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
 });
 export type VcsPullResult = typeof VcsPullResult.Type;
+
+// Git graph
+
+export const GitGraphLogInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_GRAPH_LOG_MAX_LIMIT))),
+  cursor: Schema.optional(NonNegativeInt),
+});
+export type GitGraphLogInput = typeof GitGraphLogInput.Type;
+
+export const GitGraphLogResult = Schema.Struct({
+  isRepo: Schema.Boolean,
+  commits: Schema.Array(GitGraphCommit),
+  headOid: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  nextCursor: NonNegativeInt.pipe(Schema.NullOr),
+});
+export type GitGraphLogResult = typeof GitGraphLogResult.Type;
+
+export const GitGraphCommitFilesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  oid: TrimmedNonEmptyStringSchema,
+});
+export type GitGraphCommitFilesInput = typeof GitGraphCommitFilesInput.Type;
+
+const GitGraphFileStatus = Schema.Literals([
+  "added",
+  "modified",
+  "deleted",
+  "renamed",
+  "copied",
+  "typechange",
+  "unknown",
+]);
+
+export const GitGraphCommitFile = Schema.Struct({
+  path: Schema.String,
+  previousPath: Schema.optional(Schema.String),
+  status: GitGraphFileStatus,
+});
+export type GitGraphCommitFile = typeof GitGraphCommitFile.Type;
+
+export const GitGraphCommitFilesResult = Schema.Struct({
+  isRepo: Schema.Boolean,
+  files: Schema.Array(GitGraphCommitFile),
+});
+export type GitGraphCommitFilesResult = typeof GitGraphCommitFilesResult.Type;
+
+export const GitGraphCommitDiffInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  oid: TrimmedNonEmptyStringSchema,
+  ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
+});
+export type GitGraphCommitDiffInput = typeof GitGraphCommitDiffInput.Type;
+
+export const GitGraphCommitDiffResult = Schema.Struct({
+  isRepo: Schema.Boolean,
+  diff: Schema.String,
+  truncated: Schema.Boolean,
+});
+export type GitGraphCommitDiffResult = typeof GitGraphCommitDiffResult.Type;
+
+export const VcsRenameBranchInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  oldBranch: TrimmedNonEmptyStringSchema,
+  newBranch: TrimmedNonEmptyStringSchema,
+});
+export type VcsRenameBranchInput = typeof VcsRenameBranchInput.Type;
+
+export const VcsRenameBranchResult = Schema.Struct({
+  refName: TrimmedNonEmptyStringSchema,
+});
+export type VcsRenameBranchResult = typeof VcsRenameBranchResult.Type;
+
+export const VcsDeleteRefInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  refName: TrimmedNonEmptyStringSchema,
+});
+export type VcsDeleteRefInput = typeof VcsDeleteRefInput.Type;
+
+export const VcsDeleteRefResult = Schema.Struct({
+  refName: TrimmedNonEmptyStringSchema,
+});
+export type VcsDeleteRefResult = typeof VcsDeleteRefResult.Type;
 
 // RPC / domain errors
 export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()("GitCommandError", {

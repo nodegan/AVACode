@@ -24,6 +24,12 @@ import {
   VcsSwitchRefInput,
   VcsSwitchRefResult,
   GitCommandError,
+  GitGraphCommitDiffInput,
+  GitGraphCommitDiffResult,
+  GitGraphCommitFilesInput,
+  GitGraphCommitFilesResult,
+  GitGraphLogInput,
+  GitGraphLogResult,
   VcsCreateRefInput,
   VcsCreateRefResult,
   VcsCreateWorktreeInput,
@@ -31,6 +37,10 @@ import {
   VcsInitInput,
   VcsListRefsInput,
   VcsListRefsResult,
+  VcsRenameBranchInput,
+  VcsRenameBranchResult,
+  VcsDeleteRefInput,
+  VcsDeleteRefResult,
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -191,7 +201,14 @@ export const WS_METHODS = {
   vcsRemoveWorktree: "vcs.removeWorktree",
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
+  vcsRenameBranch: "vcs.renameBranch",
+  vcsDeleteRef: "vcs.deleteRef",
   vcsInit: "vcs.init",
+
+  // Git graph methods
+  gitGraphLog: "git.graphLog",
+  gitGraphCommitFiles: "git.graphCommitFiles",
+  gitGraphCommitDiff: "git.graphCommitDiff",
 
   // Git workflow methods
   gitRunStackedAction: "git.runStackedAction",
@@ -554,6 +571,36 @@ export const WsVcsSwitchRefRpc = Rpc.make(WS_METHODS.vcsSwitchRef, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+export const WsVcsRenameBranchRpc = Rpc.make(WS_METHODS.vcsRenameBranch, {
+  payload: VcsRenameBranchInput,
+  success: VcsRenameBranchResult,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsDeleteRefRpc = Rpc.make(WS_METHODS.vcsDeleteRef, {
+  payload: VcsDeleteRefInput,
+  success: VcsDeleteRefResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+export const WsGitGraphLogRpc = Rpc.make(WS_METHODS.gitGraphLog, {
+  payload: GitGraphLogInput,
+  success: GitGraphLogResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+export const WsGitGraphCommitFilesRpc = Rpc.make(WS_METHODS.gitGraphCommitFiles, {
+  payload: GitGraphCommitFilesInput,
+  success: GitGraphCommitFilesResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+export const WsGitGraphCommitDiffRpc = Rpc.make(WS_METHODS.gitGraphCommitDiff, {
+  payload: GitGraphCommitDiffInput,
+  success: GitGraphCommitDiffResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
 export const WsVcsInitRpc = Rpc.make(WS_METHODS.vcsInit, {
   payload: VcsInitInput,
   error: Schema.Union([VcsError, EnvironmentAuthorizationError]),
@@ -847,6 +894,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsRemoveWorktreeRpc,
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
+  WsVcsRenameBranchRpc,
+  WsVcsDeleteRefRpc,
+  WsGitGraphLogRpc,
+  WsGitGraphCommitFilesRpc,
+  WsGitGraphCommitDiffRpc,
   WsVcsInitRpc,
   WsReviewGetDiffPreviewRpc,
   WsReviewGetDiffFileContentsRpc,

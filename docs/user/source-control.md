@@ -41,6 +41,15 @@ AVA Code works with the platforms your team already uses:
 - Open the review directly in your browser with one click
 - Check out a teammate's branch to review code locally
 
+### Explore History in the Git Graph
+
+Open the **Git graph** surface from the right panel (the **+** menu on the panel tabs) to see the commit history of the project across all branches:
+
+- Branches, tags, and `HEAD` render as badges on their commits
+- Click a commit to expand the files it changed; click a file to open its diff in the Diff panel
+- Use a commit's **⋯** menu to create a branch at that commit, or rename one of its local branches
+- Use **Load more** at the bottom to walk further back in history
+
 ### Know Your Setup at a Glance
 
 The **Source Control settings** page shows you exactly what's connected:

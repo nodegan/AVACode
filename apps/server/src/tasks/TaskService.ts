@@ -68,6 +68,7 @@ interface TaskRow {
   readonly statusColor: string | null;
   readonly statusId: string | null;
   readonly linkedThreadId: string | null;
+  readonly linkedBranchesJson: string | null;
   readonly listId: string | null;
   readonly listName: string | null;
   readonly externalTaskId: string | null;
@@ -129,6 +130,7 @@ interface NormalizedTaskQueryFilter {
   readonly statuses: ReadonlyArray<TaskStatusCategory>;
   readonly assignees: ReadonlyArray<string>;
   readonly linkedThreadId: string | null;
+  readonly linkedBranchName: string | null;
   readonly query: string | null;
   readonly page: number;
   readonly pageSize: number;
@@ -211,6 +213,7 @@ function mapTaskRow(row: TaskRow, notes: ReadonlyArray<TaskNote>): Task {
     statusColor: row.statusColor,
     statusId: row.statusId,
     linkedThreadId: row.linkedThreadId,
+    linkedBranches: parseJsonArray(row.linkedBranchesJson),
     listId: row.listId,
     listName: row.listName,
     externalTaskId: row.externalTaskId,
@@ -346,6 +349,7 @@ const make = Effect.gen(function* () {
       statuses: [...new Set(filter?.statuses ?? [])],
       assignees: dedupe(filter?.assignees ?? []),
       linkedThreadId: filter?.linkedThreadId?.trim() || null,
+      linkedBranchName: filter?.linkedBranchName?.trim() || null,
       query: filter?.query?.trim() || null,
       page: Math.max(1, Math.floor(filter?.page ?? 1)),
       pageSize: Math.min(
@@ -392,6 +396,14 @@ const make = Effect.gen(function* () {
     if (filter.linkedThreadId) {
       clauses.push(sql`linked_thread_id = ${filter.linkedThreadId}`);
     }
+    if (filter.linkedBranchName) {
+      clauses.push(
+        sql`EXISTS (
+          SELECT 1 FROM json_each(tasks.linked_branches) AS branch
+          WHERE branch.value = ${filter.linkedBranchName}
+        )`,
+      );
+    }
     if (filter.query) {
       // Union match so manual tasks (no provider ids) still match on title.
       const needle = `%${filter.query.replace(/[\\%_]/g, "\\$&")}%`;
@@ -424,6 +436,7 @@ const make = Effect.gen(function* () {
       tasks.status_color AS "statusColor",
       tasks.status_id AS "statusId",
       tasks.linked_thread_id AS "linkedThreadId",
+      tasks.linked_branches AS "linkedBranchesJson",
       tasks.list_id AS "listId",
       task_lists.name AS "listName",
       tasks.external_task_id AS "externalTaskId",
@@ -636,6 +649,7 @@ const make = Effect.gen(function* () {
         status_color,
         status_id,
         linked_thread_id,
+        linked_branches,
         list_id,
         external_task_id,
         external_custom_id,
@@ -656,6 +670,7 @@ const make = Effect.gen(function* () {
         ${row.statusColor},
         ${row.statusId},
         ${row.linkedThreadId},
+        ${row.linkedBranchesJson},
         ${row.listId},
         ${row.externalTaskId},
         ${row.externalCustomId},
@@ -676,6 +691,7 @@ const make = Effect.gen(function* () {
         status_color = excluded.status_color,
         status_id = excluded.status_id,
         linked_thread_id = excluded.linked_thread_id,
+        linked_branches = excluded.linked_branches,
         list_id = excluded.list_id,
         external_task_id = excluded.external_task_id,
         external_custom_id = excluded.external_custom_id,
@@ -857,6 +873,7 @@ const make = Effect.gen(function* () {
         statusColor: status.color,
         statusId: status.id,
         linkedThreadId: null,
+        linkedBranchesJson: stringifyJsonArray([]),
         listId: input.listId ?? null,
         externalTaskId: null,
         externalCustomId: null,
@@ -998,6 +1015,10 @@ const make = Effect.gen(function* () {
         statusId: status?.id ?? current.statusId,
         linkedThreadId:
           input.linkedThreadId !== undefined ? input.linkedThreadId : current.linkedThreadId,
+        linkedBranchesJson:
+          input.linkedBranches !== undefined
+            ? stringifyJsonArray(input.linkedBranches)
+            : current.linkedBranchesJson,
         listId: current.listId,
         externalTaskId: current.externalTaskId,
         externalCustomId: current.externalCustomId,
@@ -1550,6 +1571,7 @@ const make = Effect.gen(function* () {
           readonly statusColor: string | null;
           readonly statusId: string | null;
           readonly linkedThreadId: ThreadId | null;
+          readonly linkedBranchesJson: string | null;
           readonly existingCustomId: string | null;
         }>`
           SELECT
@@ -1558,6 +1580,7 @@ const make = Effect.gen(function* () {
             status_color AS "statusColor",
             status_id AS "statusId",
             linked_thread_id AS "linkedThreadId",
+            linked_branches AS "linkedBranchesJson",
             external_custom_id AS "existingCustomId"
           FROM tasks
           WHERE provider = ${adapter.id}
@@ -1580,6 +1603,8 @@ const make = Effect.gen(function* () {
           // whatever attachment they had rather than regressing to null.
           statusId: existing?.statusId ?? null,
           linkedThreadId: existing?.linkedThreadId ?? null,
+          // Branch links are the user's associations; syncs preserve them.
+          linkedBranchesJson: existing?.linkedBranchesJson ?? stringifyJsonArray([]),
           listId,
           externalTaskId: snapshot.externalTaskId,
           externalCustomId: snapshot.externalCustomId ?? existing?.existingCustomId ?? null,

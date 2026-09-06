@@ -1648,4 +1648,199 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
   });
+
+  describe("gitGraphLog", () => {
+    it.effect("returns newest-first commits with refs, head oid, and parents", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["branch", "-M", "main"]);
+        yield* writeTextFile(cwd, "feature.txt", "feature\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "add feature"]);
+
+        const graph = yield* driver.gitGraphLog({ cwd });
+
+        assert.equal(graph.isRepo, true);
+        assert.equal(graph.commits.length, 2);
+        assert.equal(graph.commits[0]?.subject, "add feature");
+        assert.equal(graph.commits[1]?.subject, "initial commit");
+        assert.equal(graph.headOid, graph.commits[0]?.oid ?? null);
+        assert.equal(graph.nextCursor, null);
+        // The initial commit is the parent of the feature commit.
+        assert.equal(graph.commits[0]?.parents[0], graph.commits[1]?.oid);
+        assert.equal(graph.commits[1]?.parents.length, 0);
+        // The checked-out branch decorates the head commit; the parent has none.
+        assert.deepEqual(
+          (graph.commits[0]?.refs ?? []).map((ref) => ({ name: ref.name, kind: ref.kind })),
+          [{ name: "main", kind: "local" }],
+        );
+        assert.deepEqual(graph.commits[1]?.refs, []);
+      }),
+    );
+
+    it.effect("paginates with nextCursor and skips", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        for (const subject of ["second", "third"]) {
+          yield* writeTextFile(cwd, `${subject}.txt`, `${subject}\n`);
+          yield* git(cwd, ["add", "."]);
+          yield* git(cwd, ["commit", "-m", subject]);
+        }
+
+        const firstPage = yield* driver.gitGraphLog({ cwd, limit: 2 });
+        assert.equal(firstPage.commits.length, 2);
+        assert.equal(firstPage.commits[0]?.subject, "third");
+        assert.equal(firstPage.nextCursor, 2);
+
+        const secondPage = yield* driver.gitGraphLog({ cwd, limit: 2, cursor: 2 });
+        assert.equal(secondPage.commits.length, 1);
+        assert.equal(secondPage.commits[0]?.subject, "initial commit");
+        assert.equal(secondPage.nextCursor, null);
+      }),
+    );
+
+    it.effect("never walks checkpoint refs", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["branch", "-M", "main"]);
+        // A hidden checkpoint commit that is only reachable from refs/t3.
+        yield* writeTextFile(cwd, "checkpoint.txt", "checkpoint\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "checkpoint commit"]);
+        const checkpointOid = yield* git(cwd, ["rev-parse", "HEAD"]);
+        yield* git(cwd, ["update-ref", "refs/t3/checkpoints/thread/turn/1", checkpointOid]);
+        // Reset main back so the checkpoint commit is only reachable via refs/t3.
+        yield* git(cwd, ["reset", "--hard", "HEAD~1"]);
+
+        const graph = yield* driver.gitGraphLog({ cwd });
+
+        assert.equal(graph.commits.length, 1);
+        assert.equal(graph.commits[0]?.subject, "initial commit");
+        assert.equal(
+          (graph.commits[0]?.refs ?? []).some((ref) => ref.name.includes("t3")),
+          false,
+        );
+      }),
+    );
+
+    it.effect("reports an empty graph for a repository without commits", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.initRepo({ cwd });
+        yield* git(cwd, ["config", "user.email", "test@test.com"]);
+        yield* git(cwd, ["config", "user.name", "Test"]);
+
+        const graph = yield* driver.gitGraphLog({ cwd });
+
+        assert.equal(graph.isRepo, true);
+        assert.deepEqual(graph.commits, []);
+        assert.equal(graph.headOid, null);
+        assert.equal(graph.nextCursor, null);
+      }),
+    );
+  });
+
+  describe("gitGraphCommitFiles", () => {
+    it.effect("reports added, modified, deleted, and renamed files", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["branch", "-M", "main"]);
+        yield* writeTextFile(cwd, "added.txt", "added\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "add file"]);
+        const addOid = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+        yield* writeTextFile(cwd, "added.txt", "added\nchanged\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "modify file"]);
+        const modifyOid = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+        yield* git(cwd, ["mv", "added.txt", "renamed.txt"]);
+        yield* git(cwd, ["commit", "-m", "rename file"]);
+        const renameOid = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+        const addFiles = yield* driver.gitGraphCommitFiles({ cwd, oid: addOid });
+        assert.deepEqual(addFiles.files, [{ path: "added.txt", status: "added" }]);
+
+        const modifyFiles = yield* driver.gitGraphCommitFiles({ cwd, oid: modifyOid });
+        assert.deepEqual(modifyFiles.files, [{ path: "added.txt", status: "modified" }]);
+
+        const renameFiles = yield* driver.gitGraphCommitFiles({ cwd, oid: renameOid });
+        assert.equal(renameFiles.files.length, 1);
+        assert.equal(renameFiles.files[0]?.status, "renamed");
+        assert.equal(renameFiles.files[0]?.path, "renamed.txt");
+        assert.equal(renameFiles.files[0]?.previousPath, "added.txt");
+      }),
+    );
+
+    it.effect("diffs a merge commit against its first parent", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["branch", "-M", "main"]);
+        yield* git(cwd, ["checkout", "-b", "feature"]);
+        yield* writeTextFile(cwd, "feature.txt", "feature\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "feature work"]);
+        const featureOid = yield* git(cwd, ["rev-parse", "HEAD"]);
+        yield* git(cwd, ["checkout", "main"]);
+        yield* writeTextFile(cwd, "main.txt", "main\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "main work"]);
+        yield* git(cwd, ["merge", "--no-ff", "-m", "merge feature", featureOid]);
+        const mergeOid = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+        const files = yield* driver.gitGraphCommitFiles({ cwd, oid: mergeOid });
+
+        // Relative to the first parent (main), the merge introduces the
+        // feature branch's change.
+        assert.deepEqual(files.files, [{ path: "feature.txt", status: "added" }]);
+      }),
+    );
+
+    it.effect("reports the root commit against the empty tree", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const rootOid = yield* git(cwd, ["rev-list", "--max-parents=0", "HEAD"]);
+
+        const files = yield* driver.gitGraphCommitFiles({ cwd, oid: rootOid });
+
+        assert.deepEqual(files.files, [{ path: "README.md", status: "added" }]);
+      }),
+    );
+  });
+
+  describe("gitGraphCommitDiff", () => {
+    it.effect("returns the commit patch with rename detection", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["branch", "-M", "main"]);
+        yield* writeTextFile(cwd, "feature.txt", "feature line\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "add feature"]);
+        const oid = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+        const diff = yield* driver.gitGraphCommitDiff({ cwd, oid });
+
+        assert.equal(diff.isRepo, true);
+        assert.equal(diff.truncated, false);
+        assert.include(diff.diff, "feature.txt");
+        assert.include(diff.diff, "+feature line");
+      }),
+    );
+  });
 });

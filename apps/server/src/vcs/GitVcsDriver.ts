@@ -18,6 +18,14 @@ import {
   type VcsCreateRefResult,
   type VcsCreateWorktreeInput,
   type VcsCreateWorktreeResult,
+  type VcsDeleteRefInput,
+  type VcsDeleteRefResult,
+  type GitGraphCommitDiffInput,
+  type GitGraphCommitDiffResult,
+  type GitGraphCommitFilesInput,
+  type GitGraphCommitFilesResult,
+  type GitGraphLogInput,
+  type GitGraphLogResult,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewResult,
   type ReviewDiffFileContentsInput,
@@ -267,12 +275,24 @@ export class GitVcsDriver extends Context.Service<
     readonly renameBranch: (
       input: GitRenameBranchInput,
     ) => Effect.Effect<GitRenameBranchResult, GitCommandError>;
+    readonly deleteRef: (
+      input: VcsDeleteRefInput,
+    ) => Effect.Effect<VcsDeleteRefResult, GitCommandError>;
     readonly createRef: (
       input: VcsCreateRefInput,
     ) => Effect.Effect<VcsCreateRefResult, GitCommandError>;
     readonly switchRef: (
       input: VcsSwitchRefInput,
     ) => Effect.Effect<VcsSwitchRefResult, GitCommandError>;
+    readonly gitGraphLog: (
+      input: GitGraphLogInput,
+    ) => Effect.Effect<GitGraphLogResult, GitCommandError>;
+    readonly gitGraphCommitFiles: (
+      input: GitGraphCommitFilesInput,
+    ) => Effect.Effect<GitGraphCommitFilesResult, GitCommandError>;
+    readonly gitGraphCommitDiff: (
+      input: GitGraphCommitDiffInput,
+    ) => Effect.Effect<GitGraphCommitDiffResult, GitCommandError>;
     readonly initRepo: (input: VcsInitInput) => Effect.Effect<void, GitCommandError>;
     readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
   }

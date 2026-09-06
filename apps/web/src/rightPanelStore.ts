@@ -22,6 +22,7 @@ export const RIGHT_PANEL_KINDS = [
   "terminal",
   "agents",
   "tasks",
+  "git-graph",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -39,6 +40,7 @@ export type RightPanelSurface =
   | { id: "diff"; kind: "diff" }
   | { id: "files"; kind: "files" }
   | { id: "tasks"; kind: "tasks" }
+  | { id: "git-graph"; kind: "git-graph" }
   | {
       id: `file:${string}`;
       kind: "file";
@@ -49,8 +51,8 @@ export type RightPanelSurface =
   | { id: "agents"; kind: "agents" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-// v10 adds the tasks surface kind.
-const RIGHT_PANEL_STORAGE_VERSION = 10;
+// v11 adds the git-graph surface kind.
+const RIGHT_PANEL_STORAGE_VERSION = 11;
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -104,6 +106,8 @@ const singletonSurface = (
       return { id: "agents", kind };
     case "tasks":
       return { id: "tasks", kind };
+    case "git-graph":
+      return { id: "git-graph", kind };
   }
 };
 

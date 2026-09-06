@@ -6,6 +6,7 @@ import type {
   TaskStatusCategory,
   ThreadId,
 } from "@t3tools/contracts";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   ArrowUpRightIcon,
   CalendarIcon,
@@ -15,20 +16,24 @@ import {
   EllipsisIcon,
   ExternalLinkIcon,
   HistoryIcon,
+  GitBranchIcon,
   Link2Icon,
   ListIcon,
   ListTodoIcon,
+  Loader2Icon,
   MessageSquarePlusIcon,
   PanelRightIcon,
   PaperclipIcon,
   PencilIcon,
+  PlusIcon,
   SquareCheckBigIcon,
   Trash2Icon,
   UnlinkIcon,
   UserIcon,
+  XIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
@@ -47,14 +52,22 @@ import { Input } from "~/components/ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { useComposerHandleContext } from "~/composerHandleContext";
+import { buildTaskBranchName } from "~/lib/taskContext";
+import { useEnvironmentQuery } from "~/state/query";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { useProject, useThread } from "~/state/entities";
+import { vcsEnvironment } from "~/state/vcs";
 import { usePreparedConnection } from "~/state/session";
 import { cn } from "~/lib/utils";
 
 import { ExpandedImageDialog } from "../chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
-import { CreateTaskBranchButton } from "./CreateTaskBranchButton";
-import { fetchTaskAttachments, fetchTaskComments } from "./taskApi";
+import { fetchTaskAttachments, fetchTaskComments, setTaskLinkedBranches } from "./taskApi";
 export function statusTone(status: TaskStatusCategory): string {
   switch (status) {
     case "done":
@@ -302,6 +315,10 @@ export interface TaskDetailsBodyProps {
   task: Task;
   /** Environment context lets the detail body fetch ClickUp attachments. */
   environmentId?: EnvironmentId | undefined;
+  /** Repository root for branch linking; omit to hide the branch section. */
+  gitCwd?: string | undefined;
+  /** Fires after a link/unlink so the owning view can refresh its copy. */
+  onTaskChanged?: ((task: Task) => void) | undefined;
 }
 
 interface ProviderCommentThread {
@@ -508,6 +525,249 @@ function formatTaskDate(timestamp: string): string {
   });
 }
 
+/**
+ * Linked local branches for the task: name-matched against the project's
+ * repository, rendered as removable chips with a searchable picker for
+ * existing branches.
+ */
+const TaskBranchesSection = memo(function TaskBranchesSection(props: TaskDetailsBodyProps) {
+  const { task } = props;
+  const environmentId = props.environmentId ?? null;
+  const gitCwd = props.gitCwd ?? null;
+  const prepared = usePreparedConnection(environmentId);
+  const [busy, setBusy] = useState(false);
+  const [branchQuery, setBranchQuery] = useState("");
+  const [branchName, setBranchName] = useState("");
+  const [pickerMode, setPickerMode] = useState<"link" | "create" | null>(null);
+
+  const refsQuery = useEnvironmentQuery(
+    environmentId !== null && gitCwd !== null
+      ? vcsEnvironment.listRefs({
+          environmentId,
+          input: { cwd: gitCwd, refKind: "local", limit: 100 },
+        })
+      : null,
+  );
+  const createRef = useAtomCommand(vcsEnvironment.createRef, { reportFailure: false });
+
+  const applyBranches = async (branchNames: ReadonlyArray<string>) => {
+    if (prepared._tag === "None") return;
+    setBusy(true);
+    try {
+      const updated = await setTaskLinkedBranches(prepared.value, task.id, branchNames);
+      props.onTaskChanged?.(updated);
+    } catch (cause) {
+      toastManager.add({
+        type: "error",
+        title: "Failed to update branch links",
+        description: cause instanceof Error ? cause.message : "An error occurred.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createAndLinkBranch = async () => {
+    const name = branchName.trim();
+    if (!name || prepared._tag === "None" || environmentId === null || gitCwd === null) return;
+    setBusy(true);
+    try {
+      const result = await createRef({
+        environmentId,
+        input: { cwd: gitCwd, refName: name },
+      });
+      if (result._tag !== "Success") {
+        if (!isAtomCommandInterrupted(result)) {
+          const cause = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: "Failed to create branch",
+            description: cause instanceof Error ? cause.message : "An error occurred.",
+          });
+        }
+        return;
+      }
+      const updated = await setTaskLinkedBranches(prepared.value, task.id, [
+        ...task.linkedBranches,
+        name,
+      ]);
+      props.onTaskChanged?.(updated);
+      setBranchName("");
+      setPickerMode(null);
+      toastManager.add({ type: "success", title: "Branch created", description: name });
+    } catch (cause) {
+      toastManager.add({
+        type: "error",
+        title: "Failed to create branch",
+        description: cause instanceof Error ? cause.message : "An error occurred.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openPicker = (mode: "link" | "create") => {
+    if (mode === "create") {
+      // Prefill with the task's conventional branch name; the user edits it.
+      setBranchName(buildTaskBranchName(task));
+    }
+    setPickerMode((current) => (current === mode ? null : mode));
+  };
+
+  const linkedBranches = task.linkedBranches;
+  const query = branchQuery.trim().toLowerCase();
+  const availableBranches = useMemo(
+    () =>
+      (refsQuery.data?.refs ?? [])
+        .map((ref) => ref.name)
+        .filter((name) => !linkedBranches.includes(name))
+        .filter((name) => query.length === 0 || name.toLowerCase().includes(query)),
+    [linkedBranches, query, refsQuery.data],
+  );
+
+  if (environmentId === null || gitCwd === null) return null;
+
+  return (
+    <section className="rounded-xl border border-border/70 bg-card/60 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          Branches
+        </h5>
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            size="xs"
+            variant={pickerMode === "link" ? "secondary" : "ghost"}
+            className="gap-1.5"
+            aria-expanded={pickerMode === "link"}
+            onClick={() => openPicker("link")}
+          >
+            <Link2Icon className="size-3.5" />
+            Link
+          </Button>
+          <Button
+            type="button"
+            size="xs"
+            variant={pickerMode === "create" ? "secondary" : "ghost"}
+            className="gap-1.5"
+            aria-expanded={pickerMode === "create"}
+            onClick={() => openPicker("create")}
+          >
+            <PlusIcon className="size-3.5" />
+            Create
+          </Button>
+        </div>
+      </div>
+      <div className="mt-2">
+        {linkedBranches.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No branches linked yet.</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {linkedBranches.map((branchName) => (
+              <span
+                key={branchName}
+                className="inline-flex items-center gap-1 rounded-md border border-border/70 bg-background py-0.5 pr-1 pl-2 text-xs"
+              >
+                <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
+                <span className="max-w-48 truncate">{branchName}</span>
+                <button
+                  type="button"
+                  aria-label={`Unlink ${branchName}`}
+                  title={`Unlink ${branchName}`}
+                  disabled={busy}
+                  className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  onClick={() =>
+                    void applyBranches(linkedBranches.filter((name) => name !== branchName))
+                  }
+                >
+                  <XIcon className="size-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      {pickerMode === "link" ? (
+        <div className="mt-2 overflow-hidden rounded-lg border border-border/70">
+          <div className="border-b border-border/70 p-1.5">
+            <Input
+              value={branchQuery}
+              onChange={(event) => setBranchQuery(event.target.value)}
+              placeholder="Search branches…"
+              aria-label="Search branches"
+            />
+          </div>
+          <div className="max-h-48 overflow-y-auto p-1">
+            {availableBranches.length === 0 ? (
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">No matching branches.</p>
+            ) : (
+              availableBranches.map((branchName) => (
+                <button
+                  key={branchName}
+                  type="button"
+                  disabled={busy}
+                  className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent/60 disabled:opacity-50"
+                  onClick={() => {
+                    setBranchQuery("");
+                    void applyBranches([...linkedBranches, branchName]);
+                  }}
+                >
+                  <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 truncate">{branchName}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
+      {pickerMode === "create" ? (
+        <form
+          className="mt-2 rounded-lg border border-border/70 p-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void createAndLinkBranch();
+          }}
+        >
+          <Input
+            value={branchName}
+            onChange={(event) => setBranchName(event.target.value)}
+            placeholder="Branch name"
+            aria-label="Branch name"
+            spellCheck={false}
+          />
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Creates the branch at the repository head and links it to this task.
+          </p>
+          <div className="mt-2 flex justify-end gap-1.5">
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setPickerMode(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="xs"
+              className="gap-1.5"
+              disabled={busy || branchName.trim().length === 0}
+            >
+              {busy ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <PlusIcon className="size-3.5" />
+              )}
+              Create branch
+            </Button>
+          </div>
+        </form>
+      ) : null}
+    </section>
+  );
+});
+
 /** One labeled cell in the details card; string values truncate with the full text on hover. */
 function TaskDetailField(props: {
   icon: ReactNode;
@@ -577,6 +837,12 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
           />
         ) : null}
       </section>
+      <TaskBranchesSection
+        task={task}
+        environmentId={props.environmentId}
+        gitCwd={props.gitCwd}
+        onTaskChanged={props.onTaskChanged}
+      />
       <div className="space-y-1">
         <h5 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           Description
@@ -741,11 +1007,9 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
 
   // One primary action depends on the link state; everything else stays quiet.
   const onLink = props.onLink;
-  const environmentId = props.environmentId;
   const showCreateThread = linkedThreadId === null && props.onCreateThread !== undefined;
   const showOpenThread = linkedThreadId !== null && props.onNavigateThread !== undefined;
   const showLinkCurrent = onLink !== undefined && !isLinkedToCurrentThread;
-  const showBranch = environmentId !== undefined && props.activeThreadId !== null;
   const showUnlink = linkedThreadId !== null && props.onUnlink !== undefined;
   const showDelete = props.onDelete !== undefined && task.provider === "manual";
   const showEdit = props.onEdit !== undefined && task.provider === "manual";
@@ -765,13 +1029,6 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
           <ArrowUpRightIcon className="size-3.5" />
           Open thread
         </Button>
-      ) : null}
-      {showBranch ? (
-        <CreateTaskBranchButton
-          task={task}
-          environmentId={environmentId}
-          threadId={props.activeThreadId}
-        />
       ) : null}
       <HeaderIconButton label="Add to thread" onClick={addToThread}>
         <MessageSquarePlusIcon className="size-3.5" />
@@ -848,7 +1105,24 @@ export interface TaskDetailsDialogProps {
 }
 
 export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
-  const { task } = props;
+  const { task: taskProp } = props;
+  // Branch links update the task in place; the owner's copy may lag until its
+  // own refresh lands, so the freshest edit wins while the ids match.
+  const [taskOverride, setTaskOverride] = useState<Task | null>(null);
+  const task = taskOverride !== null && taskOverride.id === taskProp.id ? taskOverride : taskProp;
+
+  const threadRef =
+    props.activeThreadId && props.environmentId
+      ? scopeThreadRef(props.environmentId, props.activeThreadId)
+      : null;
+  const serverThread = useThread(threadRef);
+  const projectRef =
+    serverThread && props.environmentId
+      ? scopeProjectRef(props.environmentId, serverThread.projectId)
+      : null;
+  const project = useProject(projectRef);
+  const gitCwd = serverThread?.worktreePath ?? project?.workspaceRoot ?? undefined;
+
   const hasThreadActions =
     props.onNavigateThread !== undefined ||
     props.onLink !== undefined ||
@@ -901,7 +1175,12 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
           </div>
         </DialogHeader>
         <DialogPanel className="space-y-4">
-          <TaskDetailsBody task={task} environmentId={props.environmentId} />
+          <TaskDetailsBody
+            task={task}
+            environmentId={props.environmentId}
+            gitCwd={gitCwd}
+            onTaskChanged={setTaskOverride}
+          />
         </DialogPanel>
         <DialogFooter>
           <TaskNoteComposer

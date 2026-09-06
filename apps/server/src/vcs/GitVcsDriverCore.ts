@@ -21,6 +21,9 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   GitCommandError,
+  type GitGraphCommit,
+  type GitGraphCommitFile,
+  type GitGraphRef,
   type ReviewDiffFileContentsInput,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewSource,
@@ -49,6 +52,10 @@ const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000;
 const REVIEW_UNTRACKED_DIFF_MAX_OUTPUT_BYTES = 80_000;
 const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 120_000;
+const GIT_GRAPH_LOG_DEFAULT_LIMIT = 200;
+const GIT_GRAPH_LOG_MAX_OUTPUT_BYTES = 2_000_000;
+const GIT_GRAPH_COMMIT_FILES_MAX_OUTPUT_BYTES = 1_000_000;
+const GIT_GRAPH_COMMIT_DIFF_MAX_OUTPUT_BYTES = 5_000_000;
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 
@@ -213,6 +220,126 @@ function filterBranchesForListQuery(
 
   const normalizedQuery = query.toLowerCase();
   return refs.filter((refName) => refName.name.toLowerCase().includes(normalizedQuery));
+}
+
+const GIT_GRAPH_COMMIT_OID_PATTERN = /^[0-9a-f]{40,64}$/;
+
+function parseGitGraphDecorations(decorations: string): Array<GitGraphRef> {
+  if (decorations.length === 0) return [];
+  const refs: Array<GitGraphRef> = [];
+  for (const rawEntry of decorations.split(",")) {
+    const entry = rawEntry.trim();
+    if (entry.length === 0) continue;
+    if (entry.startsWith("HEAD -> ")) {
+      const refName = entry.slice("HEAD -> ".length).trim();
+      if (refName.startsWith("refs/heads/")) {
+        const name = refName.slice("refs/heads/".length);
+        if (name.length > 0) refs.push({ name, kind: "local" });
+      }
+      continue;
+    }
+    if (entry === "HEAD") continue;
+    if (entry.startsWith("tag: ")) {
+      const refName = entry.slice("tag: ".length).trim();
+      if (refName.startsWith("refs/tags/")) {
+        const name = refName.slice("refs/tags/".length);
+        if (name.length > 0) refs.push({ name, kind: "tag" });
+      }
+      continue;
+    }
+    if (entry.startsWith("refs/heads/")) {
+      const name = entry.slice("refs/heads/".length);
+      if (name.length > 0) refs.push({ name, kind: "local" });
+      continue;
+    }
+    if (entry.startsWith("refs/remotes/")) {
+      const name = entry.slice("refs/remotes/".length);
+      if (name.length > 0 && !name.endsWith("/HEAD")) refs.push({ name, kind: "remote" });
+      continue;
+    }
+    // Unexpected decoration shape (e.g. a git that ignored --decorate=full):
+    // surface it as a local ref so the badge still renders.
+    refs.push({ name: entry, kind: "local" });
+  }
+  return refs;
+}
+
+function parseGitGraphLogRecords(stdout: string, truncated: boolean): Array<GitGraphCommit> {
+  const commits: Array<GitGraphCommit> = [];
+  for (const record of stdout.split("\x1e")) {
+    const fields = record.startsWith("\n") ? record.slice(1) : record;
+    if (fields.length === 0) continue;
+    const [oid, parentsRaw, decorations, authorName, timestampRaw, subject] = fields.split("\x00");
+    if (oid === undefined || parentsRaw === undefined || timestampRaw === undefined) continue;
+    if (!GIT_GRAPH_COMMIT_OID_PATTERN.test(oid)) continue;
+    const timestamp = Number.parseInt(timestampRaw, 10);
+    if (!Number.isFinite(timestamp) || timestamp < 0) continue;
+    commits.push({
+      oid,
+      parents: parentsRaw.split(" ").filter((parent) => parent.length > 0),
+      refs: parseGitGraphDecorations(decorations ?? ""),
+      authorName: authorName ?? "",
+      timestamp,
+      subject: subject ?? "",
+    });
+  }
+  // A truncated tail can still decode into a plausible record; drop it.
+  if (truncated && commits.length > 0) commits.pop();
+  return commits;
+}
+
+function parseGitGraphNameStatus(stdout: string, truncated: boolean): Array<GitGraphCommitFile> {
+  const tokens = stdout.split("\0");
+  if (truncated && tokens.length > 0) tokens.pop();
+  const files: Array<GitGraphCommitFile> = [];
+  let index = 0;
+  // Some git versions still emit the commit id ahead of the -z entries.
+  if (tokens[0] !== undefined && GIT_GRAPH_COMMIT_OID_PATTERN.test(tokens[0])) {
+    index = 1;
+  }
+  while (index < tokens.length) {
+    const rawStatus = tokens[index++];
+    if (rawStatus === undefined || rawStatus.length === 0) continue;
+    const filePath = tokens[index++];
+    if (filePath === undefined) break;
+    const statusKind = rawStatus[0] ?? "";
+    if (statusKind === "R" || statusKind === "C") {
+      // diff-tree emits the OLD path first (already read as `filePath`),
+      // then the NEW path; the contract carries the new path as `path`.
+      const newPath = tokens[index++];
+      if (newPath === undefined) break;
+      files.push({
+        path: newPath,
+        previousPath: filePath,
+        status: statusKind === "R" ? "renamed" : "copied",
+      });
+      continue;
+    }
+    const status =
+      statusKind === "A"
+        ? ("added" as const)
+        : statusKind === "M"
+          ? ("modified" as const)
+          : statusKind === "D"
+            ? ("deleted" as const)
+            : statusKind === "T"
+              ? ("typechange" as const)
+              : ("unknown" as const);
+    files.push({ path: filePath, status });
+  }
+  return files;
+}
+
+function parseGitGraphCommitParents(stdout: string): {
+  oid: string | null;
+  parentOid: string | null;
+} {
+  const tokens = stdout
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+  const oid = tokens[0] ?? null;
+  return { oid, parentOid: tokens.length > 1 ? (tokens[1] ?? null) : null };
 }
 
 function paginateBranches(input: {
@@ -2091,6 +2218,114 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
   });
 
+  const resolveCommitParent = Effect.fn("GitVcsDriver.gitGraph.resolveCommitParent")(function* (
+    cwd: string,
+    oid: string,
+  ) {
+    const stdout = yield* runGitStdout(
+      "GitVcsDriver.gitGraph.resolveCommitParent",
+      cwd,
+      ["rev-list", "--parents", "-n", "1", oid],
+      true,
+    );
+    return parseGitGraphCommitParents(stdout).parentOid;
+  });
+
+  const gitGraphLog: GitVcsDriver.GitVcsDriver["Service"]["gitGraphLog"] = Effect.fn("gitGraphLog")(
+    function* (input) {
+      const limit = input.limit ?? GIT_GRAPH_LOG_DEFAULT_LIMIT;
+      const skip = input.cursor ?? 0;
+      const headResult = yield* executeGit(
+        "GitVcsDriver.gitGraphLog.head",
+        input.cwd,
+        ["rev-parse", "--verify", "--quiet", "HEAD"],
+        {
+          allowNonZeroExit: true,
+          timeoutMs: 5_000,
+          maxOutputBytes: 4_096,
+        },
+      );
+      const headOid =
+        headResult.exitCode === 0 && GIT_GRAPH_COMMIT_OID_PATTERN.test(headResult.stdout.trim())
+          ? headResult.stdout.trim()
+          : null;
+      // `--branches --tags --remotes` intentionally skips refs outside those
+      // namespaces so checkpoint refs never enter the graph walk.
+      const logArgs = [
+        "log",
+        "--topo-order",
+        "--branches",
+        "--tags",
+        "--remotes",
+        "HEAD",
+        "--decorate=full",
+        "--decorate-refs=refs/heads",
+        "--decorate-refs=refs/remotes",
+        "--decorate-refs=refs/tags",
+        `--max-count=${limit + 1}`,
+        ...(skip > 0 ? [`--skip=${skip}`] : []),
+        "--format=%H%x00%P%x00%D%x00%an%x00%at%x00%s%x1e",
+      ];
+      const result = yield* executeGit("GitVcsDriver.gitGraphLog", input.cwd, logArgs, {
+        allowNonZeroExit: true,
+        maxOutputBytes: GIT_GRAPH_LOG_MAX_OUTPUT_BYTES,
+        timeoutMs: 30_000,
+      });
+      if (result.exitCode !== 0) {
+        // Unborn HEAD (no commits yet): an empty graph, not a failure.
+        return { isRepo: true, commits: [], headOid, nextCursor: null };
+      }
+      const parsed = parseGitGraphLogRecords(result.stdout, result.stdoutTruncated);
+      const hasMore = parsed.length > limit;
+      const commits = hasMore ? parsed.slice(0, limit) : parsed;
+      return {
+        isRepo: true,
+        commits,
+        headOid,
+        nextCursor: hasMore ? skip + limit : null,
+      };
+    },
+  );
+
+  const gitGraphCommitFiles: GitVcsDriver.GitVcsDriver["Service"]["gitGraphCommitFiles"] =
+    Effect.fn("gitGraphCommitFiles")(function* (input) {
+      const parentOid = yield* resolveCommitParent(input.cwd, input.oid);
+      const args = parentOid
+        ? ["diff-tree", "--no-commit-id", "--name-status", "-r", "-M", "-z", parentOid, input.oid]
+        : ["diff-tree", "--no-commit-id", "--name-status", "-r", "-M", "-z", "--root", input.oid];
+      const result = yield* executeGit("GitVcsDriver.gitGraphCommitFiles", input.cwd, args, {
+        maxOutputBytes: GIT_GRAPH_COMMIT_FILES_MAX_OUTPUT_BYTES,
+      });
+      return {
+        isRepo: true,
+        files: parseGitGraphNameStatus(result.stdout, result.stdoutTruncated),
+      };
+    });
+
+  const gitGraphCommitDiff: GitVcsDriver.GitVcsDriver["Service"]["gitGraphCommitDiff"] = Effect.fn(
+    "gitGraphCommitDiff",
+  )(function* (input) {
+    const parentOid = yield* resolveCommitParent(input.cwd, input.oid);
+    const args = [
+      "diff-tree",
+      "--patch",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      "-M",
+      ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
+      ...(parentOid ? [parentOid, input.oid] : ["--root", input.oid]),
+    ];
+    const result = yield* executeGit("GitVcsDriver.gitGraphCommitDiff", input.cwd, args, {
+      maxOutputBytes: GIT_GRAPH_COMMIT_DIFF_MAX_OUTPUT_BYTES,
+    });
+    return {
+      isRepo: true,
+      diff: result.stdout,
+      truncated: result.stdoutTruncated,
+    };
+  });
+
   const readUntrackedReviewDiffs = Effect.fn("readUntrackedReviewDiffs")(function* (cwd: string) {
     const untrackedResult = yield* executeGit(
       "GitVcsDriver.readUntrackedReviewDiffs.list",
@@ -2902,6 +3137,24 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return { branch: targetBranch };
   });
 
+  const deleteRef: GitVcsDriver.GitVcsDriver["Service"]["deleteRef"] = Effect.fn("deleteRef")(
+    function* (input) {
+      // `-d` (not `-D`): git refuses branches with unmerged commits, so a
+      // mistyped click cannot silently discard work.
+      yield* executeGit(
+        "GitVcsDriver.deleteRef",
+        input.cwd,
+        ["branch", "-d", "--", input.refName],
+        {
+          timeoutMs: 10_000,
+          fallbackErrorDetail: "git branch delete failed",
+        },
+      );
+
+      return { refName: input.refName };
+    },
+  );
+
   const switchRef: GitVcsDriver.GitVcsDriver["Service"]["switchRef"] = Effect.fn("switchRef")(
     function* (input) {
       const [localInputExists, remoteExists] = yield* Effect.all(
@@ -2986,10 +3239,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const createRef: GitVcsDriver.GitVcsDriver["Service"]["createRef"] = Effect.fn("createRef")(
     function* (input) {
-      yield* executeGit("GitVcsDriver.createRef", input.cwd, ["branch", input.refName], {
-        timeoutMs: 10_000,
-        fallbackErrorDetail: "git branch create failed",
-      });
+      yield* executeGit(
+        "GitVcsDriver.createRef",
+        input.cwd,
+        ["branch", input.refName, ...(input.startPoint ? [input.startPoint] : [])],
+        {
+          timeoutMs: 10_000,
+          fallbackErrorDetail: "git branch create failed",
+        },
+      );
       if (input.switchRef) {
         yield* switchRef({ cwd: input.cwd, refName: input.refName });
       }
@@ -3082,8 +3340,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     setBranchUpstream: (input) => withListRefsInvalidation(input.cwd, setBranchUpstream(input)),
     removeWorktree: (input) => withListRefsInvalidation(input.cwd, removeWorktree(input)),
     renameBranch: (input) => withListRefsInvalidation(input.cwd, renameBranch(input)),
+    deleteRef: (input) => withListRefsInvalidation(input.cwd, deleteRef(input)),
     createRef: (input) => withListRefsInvalidation(input.cwd, createRef(input)),
     switchRef: (input) => withListRefsInvalidation(input.cwd, switchRef(input)),
+    gitGraphLog,
+    gitGraphCommitFiles,
+    gitGraphCommitDiff,
     initRepo: initRepoWithListRefsInvalidation,
     listLocalBranchNames,
   });

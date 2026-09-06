@@ -325,6 +325,20 @@ export function createVcsEnvironmentAtoms<R, E>(
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
     }),
+    renameBranch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:rename-branch",
+      tag: WS_METHODS.vcsRenameBranch,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsCommandConcurrency,
+      onSettled: invalidateRefs,
+    }),
+    deleteRef: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:delete-ref",
+      tag: WS_METHODS.vcsDeleteRef,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsCommandConcurrency,
+      onSettled: invalidateRefs,
+    }),
     init: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:init",
       tag: WS_METHODS.vcsInit,
