@@ -24,7 +24,6 @@ import {
   ListIcon,
   ListTodoIcon,
   Loader2Icon,
-  MessageSquarePlusIcon,
   PanelRightIcon,
   PaperclipIcon,
   PencilIcon,
@@ -65,7 +64,6 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { useComposerHandleContext } from "~/composerHandleContext";
 import { buildTaskBranchName } from "~/lib/taskContext";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -1134,7 +1132,6 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
   const isLinkedToCurrentThread =
     props.activeThreadId !== null && linkedThreadId === props.activeThreadId;
   const isLinkBusy = props.busyKey === `task-link:${task.id}`;
-  const composerRef = useComposerHandleContext();
   // Unlinking detaches the task from its one linked thread, which may not be
   // the one the user is looking at; name it when the shell index knows it.
   const linkedThreadShell = useThreadShell(
@@ -1150,27 +1147,6 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
         : linkedThreadShell?.title != null
           ? `Unlink from “${linkedThreadShell.title}”`
           : "Unlink from linked thread";
-
-  const addToThread = () => {
-    const handle = composerRef?.current;
-    if (!handle) {
-      toastManager.add({
-        type: "error",
-        title: "Unable to add to thread",
-        description: "Open a chat for this project and try again.",
-      });
-      return;
-    }
-    // Attaches the task as a context chip; it rides the next message once.
-    const attached = handle.addTaskContext(task);
-    if (!attached) {
-      toastManager.add({
-        type: "error",
-        title: "Unable to add to thread",
-        description: "The chat isn't ready to accept input right now.",
-      });
-    }
-  };
 
   // One primary action depends on the link state; everything else stays quiet.
   const onLink = props.onLink;
@@ -1197,9 +1173,6 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
           Open thread
         </Button>
       ) : null}
-      <HeaderIconButton label="Add to thread" onClick={addToThread}>
-        <MessageSquarePlusIcon className="size-3.5" />
-      </HeaderIconButton>
       {showLinkCurrent ? (
         <HeaderIconButton label="Link current thread" onClick={onLink} disabled={isLinkBusy}>
           <Link2Icon className="size-3.5" />
