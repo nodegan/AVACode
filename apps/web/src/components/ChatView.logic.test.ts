@@ -628,7 +628,9 @@ describe("resolveSidebarScopedProject", () => {
       environmentId,
       id: ProjectId.make("project-2"),
       workspaceRoot: "/repos/two",
-      memberProjects: [{ environmentId, id: ProjectId.make("project-2"), workspaceRoot: "/repos/two" }],
+      memberProjects: [
+        { environmentId, id: ProjectId.make("project-2"), workspaceRoot: "/repos/two" },
+      ],
     },
   ];
 

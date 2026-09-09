@@ -103,9 +103,7 @@ export function planGitGraphProjectCarry(input: {
   }
   return {
     activate:
-      previous.surfaceActive ||
-      !input.destinationPanelOpen ||
-      input.destinationSurfaceCount === 0,
+      previous.surfaceActive || !input.destinationPanelOpen || input.destinationSurfaceCount === 0,
   };
 }
 

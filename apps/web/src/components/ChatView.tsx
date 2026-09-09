@@ -1718,9 +1718,7 @@ function ChatViewContent(props: ChatViewProps) {
       destinationSurfaceCount: rightPanelState.surfaces.length,
     });
     if (carry === null || !activeThreadRef) return;
-    useRightPanelStore
-      .getState()
-      .open(activeThreadRef, "git-graph", { activate: carry.activate });
+    useRightPanelStore.getState().open(activeThreadRef, "git-graph", { activate: carry.activate });
   }, [
     activeProjectKey,
     activeThreadRef,
