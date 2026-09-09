@@ -514,6 +514,7 @@ export function makeClickUpAdapter(httpClient: HttpClient.HttpClient): TaskProvi
     label: "ClickUp",
     credentialSecretKey: CLICKUP_TOKEN_SECRET,
     normalizeCredential: normalizeClickUpToken,
+    cachedAccountId: (configJson) => parseClickUpSyncConfig(configJson)?.workspaceId ?? null,
     bootstrapConfig: (credential) =>
       Effect.gen(function* () {
         // Whole-workspace default: an environment that never configured
@@ -553,6 +554,45 @@ export function makeClickUpAdapter(httpClient: HttpClient.HttpClient): TaskProvi
         return workspaces[0]?.name ?? null;
       }),
     cachedAccountLabel: cachedAccountLabel,
+    listWorkspaces: ({ credential }) =>
+      fetchWorkspaces(credential).pipe(
+        Effect.mapError((cause) =>
+          taskProviderError(
+            CLICKUP_PROVIDER_ID,
+            "listWorkspaces",
+            "Failed to list ClickUp workspaces",
+            cause,
+          ),
+        ),
+      ),
+    setWorkspace: ({ credential, configJson, workspaceId }) =>
+      Effect.gen(function* () {
+        const workspaces = yield* fetchWorkspaces(credential).pipe(
+          Effect.mapError((cause) =>
+            taskProviderError(
+              CLICKUP_PROVIDER_ID,
+              "setWorkspace",
+              "Failed to list ClickUp workspaces",
+              cause,
+            ),
+          ),
+        );
+        const workspace = workspaces.find((entry) => entry.id === workspaceId);
+        if (!workspace) {
+          return yield* taskProviderError(
+            CLICKUP_PROVIDER_ID,
+            "setWorkspace",
+            "That ClickUp workspace is not available for this token.",
+          );
+        }
+        // A workspace switch keeps any list scoping the config already had.
+        const previous = parseClickUpSyncConfig(configJson);
+        return serializeClickUpSyncConfig({
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
+          listIds: previous?.listIds ?? [],
+        });
+      }),
     fetchSyncTasks: ({ credential, configJson }) =>
       Effect.gen(function* () {
         const config = parseClickUpSyncConfig(configJson);

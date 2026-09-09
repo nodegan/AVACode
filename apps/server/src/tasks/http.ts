@@ -232,6 +232,29 @@ export const tasksHttpApiLayer = HttpApiBuilder.group(
             .syncProviderTasks({ providerId: args.params.providerId })
             .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_provider_failed", cause)));
         }),
+      )
+      .handle(
+        "listProviderWorkspaces",
+        Effect.fn("environment.tasks.listProviderWorkspaces")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* tasks
+            .listProviderWorkspaces({ providerId: args.params.providerId })
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_provider_failed", cause)));
+        }),
+      )
+      .handle(
+        "setProviderWorkspace",
+        Effect.fn("environment.tasks.setProviderWorkspace")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* tasks
+            .setProviderWorkspace({
+              providerId: args.params.providerId,
+              workspaceId: args.payload.workspaceId,
+            })
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("tasks_provider_failed", cause)));
+        }),
       );
   }),
 );

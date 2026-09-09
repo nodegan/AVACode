@@ -1,4 +1,9 @@
-import type { TaskAttachment, TaskComment, TaskStatusCategory } from "@t3tools/contracts";
+import type {
+  TaskAttachment,
+  TaskComment,
+  TaskProviderWorkspace,
+  TaskStatusCategory,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -78,6 +83,18 @@ export interface TaskProviderAdapter {
   }) => Effect.Effect<string | null, TaskProviderError>;
   /** Account label from the stored config alone — no network, for panel reads. */
   readonly cachedAccountLabel: (configJson: string | null) => string | null;
+  /** Configured sync target's external id from the stored config alone — no network. */
+  readonly cachedAccountId: (configJson: string | null) => string | null;
+  /** Workspaces the credential can read; the sync target the user picks from. */
+  readonly listWorkspaces: (input: {
+    readonly credential: string;
+  }) => Effect.Effect<ReadonlyArray<TaskProviderWorkspace>, TaskProviderError>;
+  /** Validates the workspace against the credential and returns the serialized config. */
+  readonly setWorkspace: (input: {
+    readonly credential: string;
+    readonly configJson: string | null;
+    readonly workspaceId: string;
+  }) => Effect.Effect<string, TaskProviderError>;
   readonly fetchSyncTasks: (input: {
     readonly credential: string;
     readonly configJson: string;

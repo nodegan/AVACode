@@ -179,13 +179,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/connections",
   },
   {
-    id: "clickup",
-    title: "ClickUp",
-    to: "/settings/connections",
-  },
-  {
     id: "task-statuses",
     title: "Task statuses",
+    to: "/settings/tasks",
+  },
+  {
+    id: "clickup",
+    title: "ClickUp",
     to: "/settings/tasks",
   },
   {

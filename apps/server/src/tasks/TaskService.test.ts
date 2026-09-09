@@ -1050,8 +1050,10 @@ it.live("getProviderStatus reports account, last sync, and last error", () =>
     assert.deepStrictEqual(bareStatus, {
       credentialConfigured: false,
       accountLabel: null,
+      accountId: null,
       lastSyncAt: null,
       lastSyncError: null,
+      syncing: false,
     });
 
     yield* service.setProviderCredential({ providerId: CLICKUP, token: "pk_test_token" });
@@ -1059,8 +1061,10 @@ it.live("getProviderStatus reports account, last sync, and last error", () =>
     const tokenOnlyStatus = yield* service.getProviderStatus({ providerId: CLICKUP });
     assert.strictEqual(tokenOnlyStatus.credentialConfigured, true);
     assert.strictEqual(tokenOnlyStatus.accountLabel, "Test Workspace");
+    assert.strictEqual(tokenOnlyStatus.accountId, null);
     assert.strictEqual(tokenOnlyStatus.lastSyncAt, null);
     assert.strictEqual(tokenOnlyStatus.lastSyncError, null);
+    assert.strictEqual(tokenOnlyStatus.syncing, false);
 
     const syncedAt = DateTime.formatIso(DateTime.makeUnsafe(1567700000000));
     yield* sql`
@@ -1070,8 +1074,70 @@ it.live("getProviderStatus reports account, last sync, and last error", () =>
     const persistedStatus = yield* service.getProviderStatus({ providerId: CLICKUP });
     assert.strictEqual(persistedStatus.credentialConfigured, true);
     assert.strictEqual(persistedStatus.accountLabel, "Persisted Workspace");
+    assert.strictEqual(persistedStatus.accountId, "4679239");
     assert.strictEqual(persistedStatus.lastSyncAt, syncedAt);
     assert.strictEqual(persistedStatus.lastSyncError, "ClickUp exploded");
+
+    // Clearing the credential drops the stored config with it: a stale
+    // workspace name must never dress up a disconnected provider.
+    yield* service.clearProviderCredential({ providerId: CLICKUP });
+    const clearedStatus = yield* service.getProviderStatus({ providerId: CLICKUP });
+    assert.deepStrictEqual(clearedStatus, {
+      credentialConfigured: false,
+      accountLabel: null,
+      accountId: null,
+      lastSyncAt: null,
+      lastSyncError: null,
+      syncing: false,
+    });
+  }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
+);
+
+it.live("listProviderWorkspaces requires a credential and lists the token's workspaces", () =>
+  Effect.gen(function* () {
+    const service = yield* TaskService;
+
+    const unconfigured = yield* service
+      .listProviderWorkspaces({ providerId: CLICKUP })
+      .pipe(Effect.flip);
+    assert.strictEqual(unconfigured._tag, "TaskServiceError");
+
+    yield* service.setProviderCredential({ providerId: CLICKUP, token: "pk_test_token" });
+    const result = yield* service.listProviderWorkspaces({ providerId: CLICKUP });
+    assert.deepStrictEqual(result.workspaces, [{ id: "4679239", name: "Test Workspace" }]);
+  }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
+);
+
+it.live("setProviderWorkspace stores the choice and kicks a sync", () =>
+  Effect.gen(function* () {
+    const service = yield* TaskService;
+    yield* service.setProviderCredential({ providerId: CLICKUP, token: "pk_test_token" });
+
+    const status = yield* service.setProviderWorkspace({
+      providerId: CLICKUP,
+      workspaceId: "4679239",
+    });
+    assert.strictEqual(status.accountId, "4679239");
+    assert.strictEqual(status.accountLabel, "Test Workspace");
+
+    // The sync runs in a detached fiber; wait for its rows to land.
+    let synced = false;
+    for (let attempt = 0; attempt < 200 && !synced; attempt++) {
+      const panel = yield* service.getPanel();
+      const state = panel.providers.find((provider) => provider.providerId === CLICKUP);
+      if (state?.lastSyncAt !== null) {
+        synced = true;
+        break;
+      }
+      yield* Effect.sleep({ milliseconds: 25 });
+    }
+    assert.ok(synced, "workspace switch did not produce a completed sync");
+
+    const finalStatus = yield* service.getProviderStatus({ providerId: CLICKUP });
+    assert.strictEqual(finalStatus.accountId, "4679239");
+    assert.ok(finalStatus.lastSyncAt);
+    assert.strictEqual(finalStatus.lastSyncError, null);
+    assert.strictEqual(finalStatus.syncing, false);
   }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
 );
 

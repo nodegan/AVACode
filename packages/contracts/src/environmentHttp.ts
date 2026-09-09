@@ -45,6 +45,7 @@ import {
   DeleteTaskStatusInput,
   ProviderIdParams,
   SetProviderCredentialInput,
+  SetProviderWorkspaceInput,
   Task,
   TaskAttachmentsResult,
   TaskCommentsResult,
@@ -54,6 +55,7 @@ import {
   TaskList,
   TaskPanel,
   TaskProviderConnectionStatus,
+  TaskProviderWorkspacesResult,
   TaskQueryResult,
   TaskStatus,
   TaskStatusesResult,
@@ -769,6 +771,23 @@ export class EnvironmentTasksHttpApi extends HttpApiGroup.make("tasks")
       headers: OptionalBearerHeaders,
       params: ProviderIdParams,
       success: TaskPanel,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("listProviderWorkspaces", "/api/tasks/providers/:providerId/workspaces", {
+      headers: OptionalBearerHeaders,
+      params: ProviderIdParams,
+      success: TaskProviderWorkspacesResult,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("setProviderWorkspace", "/api/tasks/providers/:providerId/workspace", {
+      headers: OptionalBearerHeaders,
+      params: ProviderIdParams,
+      payload: SetProviderWorkspaceInput,
+      success: TaskProviderConnectionStatus,
       error: EnvironmentHttpCommonError,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}

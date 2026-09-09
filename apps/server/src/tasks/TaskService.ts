@@ -26,6 +26,7 @@ import {
   type TaskProviderConnectionStatus,
   type TaskProviderId,
   type TaskProviderState,
+  type TaskProviderWorkspacesResult,
   type TaskStatus,
   type TaskStatusCategory,
   type TaskStatusesResult,
@@ -278,6 +279,13 @@ export class TaskService extends Context.Service<
     readonly getProviderStatus: (input: {
       readonly providerId: string;
     }) => Effect.Effect<TaskProviderConnectionStatus, TaskServiceFailure>;
+    readonly listProviderWorkspaces: (input: {
+      readonly providerId: string;
+    }) => Effect.Effect<TaskProviderWorkspacesResult, TaskServiceFailure>;
+    readonly setProviderWorkspace: (input: {
+      readonly providerId: string;
+      readonly workspaceId: string;
+    }) => Effect.Effect<TaskProviderConnectionStatus, TaskServiceFailure>;
     readonly syncProviderTasks: (input: {
       readonly providerId: string;
     }) => Effect.Effect<TaskPanel, TaskServiceFailure>;
@@ -289,6 +297,10 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const secretStore = yield* ServerSecretStore;
   const registry = yield* TaskProviderRegistry;
+
+  // Providers with a sync fiber currently running. In-memory on purpose: a
+  // restart kills the fiber, so a persisted flag could only ever lie.
+  const syncingProviders = new Set<string>();
 
   const nowIso = () => DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
@@ -722,9 +734,13 @@ const make = Effect.gen(function* () {
                 providerId: adapter.id,
                 label: adapter.label,
                 credentialConfigured: credential !== null,
-                accountLabel: adapter.cachedAccountLabel(configRow?.configJson ?? null),
+                accountLabel:
+                  credential === null
+                    ? null
+                    : adapter.cachedAccountLabel(configRow?.configJson ?? null),
                 lastSyncAt: configRow?.lastSyncAt ?? null,
                 lastSyncError: configRow?.lastSyncError ?? null,
+                syncing: syncingProviders.has(adapter.id),
               } satisfies TaskProviderState;
             }),
           { discard: false },
@@ -1480,6 +1496,18 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
+      // The stored config (workspace choice, last sync) describes a connection
+      // that no longer exists; drop it so status reads clean and a re-connect
+      // starts from scratch.
+      yield* sql`DELETE FROM task_provider_configs WHERE provider = ${input.providerId}`.pipe(
+        Effect.mapError((cause) =>
+          taskServiceError(
+            "tasks.clearProviderCredential",
+            `Failed to clear ${adapter.label} sync state`,
+            cause,
+          ),
+        ),
+      );
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError(
@@ -1503,7 +1531,10 @@ const make = Effect.gen(function* () {
         readCredential(adapter),
         loadProviderConfigRow(adapter.id),
       ]);
-      let accountLabel = adapter.cachedAccountLabel(configRow?.configJson ?? null);
+      // No credential, no account: a stale config row must not describe a
+      // connection that was cleared.
+      let accountLabel =
+        credential === null ? null : adapter.cachedAccountLabel(configRow?.configJson ?? null);
       if (credential && !accountLabel) {
         accountLabel = yield* adapter
           .accountLabel({ credential, configJson: configRow?.configJson ?? null })
@@ -1512,8 +1543,10 @@ const make = Effect.gen(function* () {
       return {
         credentialConfigured: credential !== null,
         accountLabel,
+        accountId: adapter.cachedAccountId(configRow?.configJson ?? null),
         lastSyncAt: configRow?.lastSyncAt ?? null,
         lastSyncError: configRow?.lastSyncError ?? null,
+        syncing: syncingProviders.has(input.providerId),
       } satisfies TaskProviderConnectionStatus;
     }).pipe(
       Effect.mapError((cause) =>
@@ -1677,26 +1710,106 @@ const make = Effect.gen(function* () {
       // Sync runs in a detached fiber: provider paging plus row writes take
       // minutes, and holding the HTTP response open exposes it to every hop's
       // timeout. Clients poll the panel for lastSyncAt/lastSyncError instead.
-      yield* Effect.forkDetach(
-        runProviderSync({
-          adapter,
-          credential,
-          configJson,
-          previousLastSyncAt: configRow?.lastSyncAt ?? null,
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning(`${adapter.label} sync crashed`, {
-              cause,
-            }),
+      // A kick while one is already running is a no-op — upserts are
+      // idempotent, a second fiber would only double the provider traffic.
+      if (!syncingProviders.has(adapter.id)) {
+        syncingProviders.add(adapter.id);
+        yield* Effect.forkDetach(
+          runProviderSync({
+            adapter,
+            credential,
+            configJson,
+            previousLastSyncAt: configRow?.lastSyncAt ?? null,
+          }).pipe(
+            Effect.ensuring(Effect.sync(() => syncingProviders.delete(adapter.id))),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(`${adapter.label} sync crashed`, {
+                cause,
+              }),
+            ),
           ),
-        ),
-      );
+        );
+      }
       return yield* getPanel();
     }).pipe(
       Effect.mapError((cause) =>
         taskServiceError(
           "tasks.syncProviderTasks",
           isTaskServiceError(cause) ? cause.message : "Failed to start provider sync",
+          cause,
+        ),
+      ),
+    );
+
+  const listProviderWorkspaces: TaskService["Service"]["listProviderWorkspaces"] = (input) =>
+    Effect.gen(function* () {
+      const adapter = registry.get(input.providerId);
+      if (!adapter) {
+        return yield* taskServiceError(
+          "tasks.listProviderWorkspaces",
+          `Unknown task provider: ${input.providerId}`,
+        );
+      }
+      const credential = yield* readCredential(adapter);
+      if (!credential) {
+        return yield* taskServiceError(
+          "tasks.listProviderWorkspaces",
+          `Configure a ${adapter.label} credential before listing workspaces.`,
+        );
+      }
+      const workspaces = yield* adapter
+        .listWorkspaces({ credential })
+        .pipe(Effect.mapError((cause) => providerFailure("tasks.listProviderWorkspaces", cause)));
+      return { workspaces } satisfies TaskProviderWorkspacesResult;
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError(
+          "tasks.listProviderWorkspaces",
+          isTaskServiceError(cause) ? cause.message : "Failed to list provider workspaces",
+          cause,
+        ),
+      ),
+    );
+
+  const setProviderWorkspace: TaskService["Service"]["setProviderWorkspace"] = (input) =>
+    Effect.gen(function* () {
+      const adapter = registry.get(input.providerId);
+      if (!adapter) {
+        return yield* taskServiceError(
+          "tasks.setProviderWorkspace",
+          `Unknown task provider: ${input.providerId}`,
+        );
+      }
+      const credential = yield* readCredential(adapter);
+      if (!credential) {
+        return yield* taskServiceError(
+          "tasks.setProviderWorkspace",
+          `Configure a ${adapter.label} credential before choosing a workspace.`,
+        );
+      }
+      const configRow = yield* loadProviderConfigRow(adapter.id);
+      const configJson = yield* adapter
+        .setWorkspace({
+          credential,
+          configJson: configRow?.configJson ?? null,
+          workspaceId: input.workspaceId,
+        })
+        .pipe(Effect.mapError((cause) => providerFailure("tasks.setProviderWorkspace", cause)));
+      // The stored lastSyncAt describes the previous workspace's sync, so the
+      // workspace switch starts from a clean slate; the kicked sync repopulates.
+      yield* upsertProviderConfigRow({
+        providerId: adapter.id,
+        configJson,
+        lastSyncAt: null,
+        lastSyncError: null,
+      });
+      yield* syncProviderTasks({ providerId: adapter.id });
+      return yield* getProviderStatus({ providerId: adapter.id });
+    }).pipe(
+      Effect.mapError((cause) =>
+        taskServiceError(
+          "tasks.setProviderWorkspace",
+          isTaskServiceError(cause) ? cause.message : "Failed to set provider workspace",
           cause,
         ),
       ),
@@ -1723,6 +1836,8 @@ const make = Effect.gen(function* () {
     setProviderCredential,
     clearProviderCredential,
     getProviderStatus,
+    listProviderWorkspaces,
+    setProviderWorkspace,
     syncProviderTasks,
   });
 });

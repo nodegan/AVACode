@@ -1194,7 +1194,10 @@ export function TasksPanel(props: {
     });
   }, [deleteTarget, listSelection, runMutation]);
 
-  const isSyncing = busyKey === "provider-sync";
+  // A sync shows as running when this client kicked it or when the server
+  // reports one (e.g. started from Settings); the panel poll refreshes the flag.
+  const isSyncing =
+    busyKey === "provider-sync" || connectedProviders.some((provider) => provider.syncing);
   const lastSyncRelative = lastSyncAt === null ? null : formatRelativeTimeLabel(lastSyncAt);
   const lastSyncError = syncStatusProvider?.lastSyncError ?? null;
   const headerActions = (
@@ -1229,7 +1232,7 @@ export function TasksPanel(props: {
       <Button
         size="icon-sm"
         variant="ghost"
-        onClick={() => void navigate({ to: "/settings/connections", hash: "clickup" })}
+        onClick={() => void navigate({ to: "/settings/tasks", hash: "clickup" })}
         aria-label="Task provider settings"
       >
         <SettingsIcon />

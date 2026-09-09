@@ -35,7 +35,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
-import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
+import { SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
 /** Categories users can pick; "unknown" is a server-side fallback, not a choice. */
@@ -419,7 +419,7 @@ export function TaskStatusSettingsPanel() {
     : [];
 
   return (
-    <SettingsPageContainer>
+    <>
       <SettingsSection
         id={searchableSetting("task-statuses").id}
         title="Task statuses"
@@ -525,6 +525,6 @@ export function TaskStatusSettingsPanel() {
           }}
         />
       ) : null}
-    </SettingsPageContainer>
+    </>
   );
 }

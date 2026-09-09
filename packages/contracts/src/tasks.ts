@@ -246,6 +246,25 @@ export const TaskFacets = Schema.Struct({
 });
 export type TaskFacets = typeof TaskFacets.Type;
 
+/** A workspace (ClickUp "team") the credential can read tasks from. */
+export const TaskProviderWorkspace = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+});
+export type TaskProviderWorkspace = typeof TaskProviderWorkspace.Type;
+
+export const TaskProviderWorkspacesResult = Schema.Struct({
+  workspaces: Schema.Array(TaskProviderWorkspace).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+});
+export type TaskProviderWorkspacesResult = typeof TaskProviderWorkspacesResult.Type;
+
+export const SetProviderWorkspaceInput = Schema.Struct({
+  workspaceId: TrimmedNonEmptyString,
+});
+export type SetProviderWorkspaceInput = typeof SetProviderWorkspaceInput.Type;
+
 /** Per-provider connection + sync state shown on the panel. */
 export const TaskProviderState = Schema.Struct({
   providerId: TaskProviderId,
@@ -259,6 +278,8 @@ export const TaskProviderState = Schema.Struct({
   lastSyncError: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** A background sync for this provider is currently running. */
+  syncing: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type TaskProviderState = typeof TaskProviderState.Type;
 
@@ -394,9 +415,15 @@ export const TaskProviderConnectionStatus = Schema.Struct({
   accountLabel: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** The configured sync target's external id (ClickUp workspace id); null before the first config. */
+  accountId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   lastSyncAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   lastSyncError: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** A background sync for this provider is currently running. */
+  syncing: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type TaskProviderConnectionStatus = typeof TaskProviderConnectionStatus.Type;
