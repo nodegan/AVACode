@@ -13,6 +13,7 @@ import {
   resolveProjectExpanded,
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
+  setSidebarProjectScopeKey,
   setThreadChangedFilesExpanded,
   type UiState,
 } from "./uiStateStore";
@@ -24,6 +25,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
+    sidebarProjectScopeKey: null,
     ...overrides,
   };
 }
@@ -79,6 +81,15 @@ describe("uiStateStore pure functions", () => {
       "environment-b:/repo": false,
     });
     expect(setProjectExpanded(next, keys, false)).toBe(next);
+  });
+
+  it("scopes the sidebar to a project key and back to all projects", () => {
+    const scoped = setSidebarProjectScopeKey(makeUiState(), "group-one");
+    expect(scoped.sidebarProjectScopeKey).toBe("group-one");
+    expect(setSidebarProjectScopeKey(scoped, "group-one")).toBe(scoped);
+
+    expect(setSidebarProjectScopeKey(scoped, "").sidebarProjectScopeKey).toBeNull();
+    expect(setSidebarProjectScopeKey(scoped, null).sidebarProjectScopeKey).toBeNull();
   });
 
   it("reorders from the current atom-derived project order", () => {
@@ -183,6 +194,7 @@ describe("parsePersistedState", () => {
           "turn-2": true,
         },
       },
+      sidebarProjectScopeKey: null,
     });
   });
 

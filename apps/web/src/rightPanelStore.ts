@@ -62,7 +62,11 @@ export interface ThreadRightPanelState {
 
 interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
-  open: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "terminal">) => void;
+  open: (
+    ref: ScopedThreadRef,
+    kind: Exclude<RightPanelKind, "file" | "terminal">,
+    options?: { readonly activate?: boolean },
+  ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
@@ -266,14 +270,15 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
   persist(
     (set) => ({
       byThreadKey: {},
-      open: (ref, kind) =>
+      open: (ref, kind, options) =>
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            const activate = options?.activate ?? true;
             if (kind === "preview") {
               const existing = current.surfaces.find((surface) => surface.kind === "preview");
-              return upsertSurface(current, existing ?? browserSurface(null));
+              return upsertSurface(current, existing ?? browserSurface(null), activate);
             }
-            return upsertSurface(current, singletonSurface(kind));
+            return upsertSurface(current, singletonSurface(kind), activate);
           }),
         })),
       openBrowser: (ref, tabId) =>

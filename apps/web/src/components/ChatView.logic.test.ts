@@ -22,8 +22,10 @@ import {
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  planGitGraphProjectCarry,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
+  resolveSidebarScopedProject,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   startNewThreadForProject,
@@ -521,6 +523,145 @@ describe("startNewThreadForProject", () => {
       }),
     ).toBe(false);
     expect(called).toBe(false);
+  });
+});
+
+describe("planGitGraphProjectCarry", () => {
+  const openActive = { projectKey: "project-1", surfaceOpen: true, surfaceActive: true };
+
+  it("carries the graph to the new project, activating it when it was active", () => {
+    expect(
+      planGitGraphProjectCarry({
+        previous: openActive,
+        projectKey: "project-2",
+        destinationPanelOpen: false,
+        destinationSurfaceCount: 0,
+      }),
+    ).toEqual({ activate: true });
+  });
+
+  it("keeps the carried graph in the background when it was not active", () => {
+    expect(
+      planGitGraphProjectCarry({
+        previous: { ...openActive, surfaceActive: false },
+        projectKey: "project-2",
+        destinationPanelOpen: true,
+        destinationSurfaceCount: 2,
+      }),
+    ).toEqual({ activate: false });
+  });
+
+  it("activates the carried graph when the destination panel has nothing to show", () => {
+    expect(
+      planGitGraphProjectCarry({
+        previous: { ...openActive, surfaceActive: false },
+        projectKey: "project-2",
+        destinationPanelOpen: true,
+        destinationSurfaceCount: 0,
+      }),
+    ).toEqual({ activate: true });
+  });
+
+  it("does not carry when the project did not change", () => {
+    expect(
+      planGitGraphProjectCarry({
+        previous: openActive,
+        projectKey: "project-1",
+        destinationPanelOpen: false,
+        destinationSurfaceCount: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not carry when the graph was not open on the thread being left", () => {
+    expect(
+      planGitGraphProjectCarry({
+        previous: { ...openActive, surfaceOpen: false },
+        projectKey: "project-2",
+        destinationPanelOpen: false,
+        destinationSurfaceCount: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not carry on first mount or without a project key", () => {
+    expect(
+      planGitGraphProjectCarry({
+        previous: null,
+        projectKey: "project-2",
+        destinationPanelOpen: false,
+        destinationSurfaceCount: 0,
+      }),
+    ).toBeNull();
+    expect(
+      planGitGraphProjectCarry({
+        previous: openActive,
+        projectKey: null,
+        destinationPanelOpen: false,
+        destinationSurfaceCount: 0,
+      }),
+    ).toBeNull();
+    expect(
+      planGitGraphProjectCarry({
+        previous: { ...openActive, projectKey: null },
+        projectKey: "project-2",
+        destinationPanelOpen: false,
+        destinationSurfaceCount: 0,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("resolveSidebarScopedProject", () => {
+  const representative = { environmentId, id: projectId, workspaceRoot: "/repos/one" };
+  const groups = [
+    {
+      projectKey: "group-one",
+      ...representative,
+      memberProjects: [
+        representative,
+        { environmentId, id: ProjectId.make("project-1b"), workspaceRoot: "/repos/one-remote" },
+      ],
+    },
+    {
+      projectKey: "group-two",
+      environmentId,
+      id: ProjectId.make("project-2"),
+      workspaceRoot: "/repos/two",
+      memberProjects: [{ environmentId, id: ProjectId.make("project-2"), workspaceRoot: "/repos/two" }],
+    },
+  ];
+
+  it("resolves the scoped group's representative member", () => {
+    expect(resolveSidebarScopedProject({ scopeKey: "group-two", groups })).toEqual({
+      environmentId,
+      id: ProjectId.make("project-2"),
+      workspaceRoot: "/repos/two",
+    });
+  });
+
+  it("falls back to the first member when the representative is absent", () => {
+    const [first] = groups;
+    const orphaned = {
+      projectKey: "group-orphan",
+      environmentId,
+      id: ProjectId.make("project-x"),
+      workspaceRoot: "/repos/x",
+      memberProjects: [
+        { environmentId, id: ProjectId.make("project-x2"), workspaceRoot: "/repos/x2" },
+      ],
+    };
+    expect(resolveSidebarScopedProject({ scopeKey: "group-orphan", groups: [orphaned] })).toEqual({
+      environmentId,
+      id: ProjectId.make("project-x2"),
+      workspaceRoot: "/repos/x2",
+    });
+    expect(first).toBeDefined();
+  });
+
+  it("returns null when no project is scoped or the group no longer exists", () => {
+    expect(resolveSidebarScopedProject({ scopeKey: null, groups })).toBeNull();
+    expect(resolveSidebarScopedProject({ scopeKey: "group-gone", groups })).toBeNull();
   });
 });
 

@@ -244,7 +244,6 @@ function CommitGraphCell({
 interface GitGraphPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
-  currentRefName: string | null;
   onOpenCommitFile: (oid: string, filePath: string) => void;
   onCurrentBranchRenamed: (newBranch: string) => void;
   /** Opens the tasks surface focused on the given task. */
@@ -254,7 +253,6 @@ interface GitGraphPanelProps {
 export default function GitGraphPanel({
   environmentId,
   cwd,
-  currentRefName,
   onOpenCommitFile,
   onCurrentBranchRenamed,
   onOpenTask,
@@ -275,6 +273,9 @@ export default function GitGraphPanel({
 
   // Working-tree changes stream live from the vcs status subscription.
   const statusQuery = useEnvironmentQuery(vcsEnvironment.status({ environmentId, input: { cwd } }));
+  // The current branch comes from this repo's own status: the graph can be
+  // scoped to a project other than the active thread's.
+  const currentRefName = statusQuery.data?.refName ?? null;
   const uncommittedFiles = statusQuery.data?.workingTree.files ?? [];
   const hasUncommittedFiles =
     statusQuery.data?.hasWorkingTreeChanges === true && uncommittedFiles.length > 0;

@@ -38,6 +38,77 @@ export function startNewThreadForProject(
   return true;
 }
 
+export interface GitGraphCarrySnapshot {
+  readonly projectKey: string | null;
+  readonly surfaceOpen: boolean;
+  readonly surfaceActive: boolean;
+}
+
+export interface GitGraphScopeTarget {
+  readonly environmentId: EnvironmentId;
+  readonly id: ProjectId;
+  readonly workspaceRoot: string;
+}
+
+/**
+ * Resolves the sidebar project scope selection to the concrete project whose
+ * repository the git graph should browse: the group's representative member,
+ * falling back to its first member. Null when no project is scoped (or the
+ * scoped group no longer exists) and the graph should follow the active
+ * thread's project instead.
+ */
+export function resolveSidebarScopedProject(input: {
+  readonly scopeKey: string | null;
+  readonly groups: ReadonlyArray<{
+    readonly projectKey: string;
+    readonly environmentId: EnvironmentId;
+    readonly id: ProjectId;
+    readonly memberProjects: ReadonlyArray<GitGraphScopeTarget>;
+  }>;
+}): GitGraphScopeTarget | null {
+  if (input.scopeKey === null) return null;
+  const group = input.groups.find((candidate) => candidate.projectKey === input.scopeKey);
+  if (!group) return null;
+  return (
+    group.memberProjects.find(
+      (member) => member.environmentId === group.environmentId && member.id === group.id,
+    ) ??
+    group.memberProjects[0] ??
+    null
+  );
+}
+
+/**
+ * The git graph is project-scoped but panel surfaces are thread-scoped: when
+ * the active project switches, an open git-graph surface must follow so the
+ * graph re-scopes to the new project instead of dropping with the old thread.
+ * Returns the `activate` flag for the destination `open()` call, or null when
+ * nothing should be carried.
+ */
+export function planGitGraphProjectCarry(input: {
+  previous: GitGraphCarrySnapshot | null;
+  projectKey: string | null;
+  destinationPanelOpen: boolean;
+  destinationSurfaceCount: number;
+}): { readonly activate: boolean } | null {
+  const { previous } = input;
+  if (
+    previous === null ||
+    input.projectKey === null ||
+    previous.projectKey === null ||
+    previous.projectKey === input.projectKey ||
+    !previous.surfaceOpen
+  ) {
+    return null;
+  }
+  return {
+    activate:
+      previous.surfaceActive ||
+      !input.destinationPanelOpen ||
+      input.destinationSurfaceCount === 0,
+  };
+}
+
 export function resolveThreadMetadataUpdateForNextTurn(input: {
   currentModelSelection: ModelSelection;
   nextModelSelection?: ModelSelection;

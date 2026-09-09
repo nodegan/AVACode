@@ -187,6 +187,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "../logicalProject";
+import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
@@ -281,10 +282,13 @@ import {
   dismissBranchMismatchForSession,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  planGitGraphProjectCarry,
+  resolveSidebarScopedProject,
   shouldShowBranchMismatchBanner,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
+  type GitGraphCarrySnapshot,
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   cloneComposerImageForRetry,
@@ -1690,6 +1694,42 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().reconcileFileSurfaces(activeThreadRef, activeProject !== null);
   }, [activeEnvironmentBootstrapComplete, activeProject, activeThreadRef]);
 
+  // The git graph is project-scoped, but panel surfaces are thread-scoped:
+  // when the active project switches, carry an open git-graph surface to the
+  // new thread so the graph re-scopes to that project instead of dropping.
+  const gitGraphSurfaceOpen =
+    rightPanelState.isOpen &&
+    rightPanelState.surfaces.some((surface) => surface.kind === "git-graph");
+  const gitGraphSurfaceActive = activeRightPanelSurface?.kind === "git-graph";
+  const gitGraphCarryRef = useRef<GitGraphCarrySnapshot | null>(null);
+  useEffect(() => {
+    const previous = gitGraphCarryRef.current;
+    if (activeThreadRef !== null && activeProjectKey !== null) {
+      gitGraphCarryRef.current = {
+        projectKey: activeProjectKey,
+        surfaceOpen: gitGraphSurfaceOpen,
+        surfaceActive: gitGraphSurfaceActive,
+      };
+    }
+    const carry = planGitGraphProjectCarry({
+      previous,
+      projectKey: activeProjectKey,
+      destinationPanelOpen: rightPanelState.isOpen,
+      destinationSurfaceCount: rightPanelState.surfaces.length,
+    });
+    if (carry === null || !activeThreadRef) return;
+    useRightPanelStore
+      .getState()
+      .open(activeThreadRef, "git-graph", { activate: carry.activate });
+  }, [
+    activeProjectKey,
+    activeThreadRef,
+    gitGraphSurfaceActive,
+    gitGraphSurfaceOpen,
+    rightPanelState.isOpen,
+    rightPanelState.surfaces,
+  ]);
+
   // Compute the list of environments this logical project spans, used to
   // drive the environment picker in BranchToolbar.
   const allProjects = useProjects();
@@ -2506,6 +2546,37 @@ function ChatViewContent(props: ChatViewProps) {
           input: { cwd: gitStatusCwd },
         }),
   );
+  // The git graph is project-scoped: it browses the repository of the project
+  // picked in the sidebar's project scope selector, falling back to the active
+  // thread's project when the selector sits on "All projects".
+  const sidebarProjectScopeKey = useUiStateStore((state) => state.sidebarProjectScopeKey);
+  const sidebarScopedProject = useMemo(() => {
+    const groups = buildSidebarProjectSnapshots({
+      projects: allProjects,
+      settings: projectGroupingSettings,
+      primaryEnvironmentId,
+      resolveEnvironmentLabel: () => null,
+    });
+    return resolveSidebarScopedProject({ scopeKey: sidebarProjectScopeKey, groups });
+  }, [allProjects, primaryEnvironmentId, projectGroupingSettings, sidebarProjectScopeKey]);
+  const isGraphScopedAway =
+    sidebarScopedProject !== null &&
+    activeProject !== null &&
+    (sidebarScopedProject.environmentId !== activeProject.environmentId ||
+      sidebarScopedProject.id !== activeProject.id);
+  const graphScope = useMemo(() => {
+    if (sidebarScopedProject) {
+      return {
+        environmentId: sidebarScopedProject.environmentId,
+        cwd: sidebarScopedProject.workspaceRoot,
+      };
+    }
+    if (!activeProject || gitStatusCwd === null) return null;
+    return {
+      environmentId: activeThreadRef?.environmentId ?? activeProject.environmentId,
+      cwd: gitStatusCwd,
+    };
+  }, [activeProject, activeThreadRef, gitStatusCwd, sidebarScopedProject]);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
   // Prefer an instance-id match so a custom Codex instance (e.g.
@@ -3168,21 +3239,25 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "tasks");
   }, [activeProject, activeThreadRef]);
   const addGitGraphSurface = useCallback(() => {
-    if (!activeThreadRef || !isServerThread || !isGitRepo) return;
+    if (!activeThreadRef || !activeProject || !isGitRepo) return;
     useRightPanelStore.getState().open(activeThreadRef, "git-graph");
-  }, [activeThreadRef, isGitRepo, isServerThread]);
+  }, [activeProject, activeThreadRef, isGitRepo]);
   const openCommitFileDiff = useCallback(
     (oid: string, filePath: string) => {
-      if (!activeThreadRef || !isServerThread || !isGitRepo) return;
+      // The diff panel reviews the active thread's repository; a commit picked
+      // from a graph scoped to another project has no diff to open here.
+      if (!activeThreadRef || !isServerThread || !isGitRepo || isGraphScopedAway) return;
       useDiffPanelStore.getState().selectCommit(activeThreadRef, oid, filePath);
       useRightPanelStore.getState().open(activeThreadRef, "diff");
       onDiffPanelOpen?.();
     },
-    [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen],
+    [activeThreadRef, isGitRepo, isGraphScopedAway, isServerThread, onDiffPanelOpen],
   );
   const handleGraphBranchRenamed = useCallback(
     (newBranch: string) => {
-      if (!activeThreadRef || !activeThread) return;
+      // Thread metadata tracks the thread's own repository; a rename inside a
+      // graph scoped to another project must not touch the active thread.
+      if (!activeThreadRef || !activeThread || isGraphScopedAway) return;
       void updateThreadMetadata({
         environmentId: activeThreadRef.environmentId,
         input: {
@@ -3192,7 +3267,7 @@ function ChatViewContent(props: ChatViewProps) {
         },
       });
     },
-    [activeThread, activeThreadRef, updateThreadMetadata],
+    [activeThread, activeThreadRef, isGraphScopedAway, updateThreadMetadata],
   );
   const handleGraphOpenTask = useCallback(
     (taskId: string) => {
@@ -5991,16 +6066,13 @@ function ChatViewContent(props: ChatViewProps) {
         activeThread={activeThread}
       />
     ) : activeRightPanelSurface?.kind === "git-graph" &&
-      activeProject &&
-      isServerThread &&
-      isGitRepo &&
-      gitStatusCwd ? (
+      graphScope &&
+      (isGraphScopedAway || (activeProject && isGitRepo && gitStatusCwd)) ? (
       <Suspense fallback={null}>
         <GitGraphPanel
-          key={`${activeThreadKey}:${gitStatusCwd}`}
-          environmentId={activeThreadRef?.environmentId ?? activeProject.environmentId}
-          cwd={gitStatusCwd}
-          currentRefName={gitStatusQuery.data?.refName ?? null}
+          key={`${graphScope.environmentId}:${graphScope.cwd}`}
+          environmentId={graphScope.environmentId}
+          cwd={graphScope.cwd}
           onOpenCommitFile={openCommitFileDiff}
           onCurrentBranchRenamed={handleGraphBranchRenamed}
           onOpenTask={handleGraphOpenTask}
@@ -6445,7 +6517,7 @@ function ChatViewContent(props: ChatViewProps) {
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
-          gitGraphAvailable={isServerThread && isGitRepo}
+          gitGraphAvailable={activeProject !== null && isGitRepo}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -6476,7 +6548,7 @@ function ChatViewContent(props: ChatViewProps) {
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
-            gitGraphAvailable={isServerThread && isGitRepo}
+            gitGraphAvailable={activeProject !== null && isGitRepo}
           >
             {rightPanelContent}
           </RightPanelTabs>

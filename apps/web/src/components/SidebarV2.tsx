@@ -1546,7 +1546,10 @@ export default function SidebarV2() {
 
   // Project scope: one menu above the list. Scoping filters the list without
   // making the header width depend on the number or length of project names.
-  const [projectScopeKey, setProjectScopeKey] = useState<string | null>(null);
+  // Shared through the ui state store so project-scoped surfaces (the git
+  // graph) can follow the selection.
+  const projectScopeKey = useUiStateStore((state) => state.sidebarProjectScopeKey);
+  const setProjectScopeKey = useUiStateStore((state) => state.setSidebarProjectScopeKey);
   const scopedProjectGroup = useMemo(
     () =>
       projectScopeKey === null

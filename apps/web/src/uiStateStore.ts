@@ -43,7 +43,13 @@ export interface UiEndpointState {
   defaultAdvertisedEndpointKey: string | null;
 }
 
-export interface UiState extends UiProjectState, UiThreadState, UiEndpointState {}
+export interface UiScopeState {
+  // Sidebar project scope selector (logical project group key, null = all).
+  // Session-only: drives thread-list filtering and the git graph scope.
+  sidebarProjectScopeKey: string | null;
+}
+
+export interface UiState extends UiProjectState, UiThreadState, UiEndpointState, UiScopeState {}
 
 const initialState: UiState = {
   projectExpandedById: {},
@@ -51,6 +57,7 @@ const initialState: UiState = {
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
+  sidebarProjectScopeKey: null,
 };
 
 const LEGACY_PROJECT_CWD_PREFERENCE_PREFIX = "legacy-project-cwd:";
@@ -135,6 +142,8 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
       parsed.defaultAdvertisedEndpointKey.length > 0
         ? parsed.defaultAdvertisedEndpointKey
         : null,
+    // Session-only scope: never persisted.
+    sidebarProjectScopeKey: null,
   };
 }
 
@@ -304,6 +313,17 @@ export function setDefaultAdvertisedEndpointKey(state: UiState, key: string | nu
   };
 }
 
+export function setSidebarProjectScopeKey(state: UiState, key: string | null): UiState {
+  const nextKey = key && key.length > 0 ? key : null;
+  if (state.sidebarProjectScopeKey === nextKey) {
+    return state;
+  }
+  return {
+    ...state,
+    sidebarProjectScopeKey: nextKey,
+  };
+}
+
 export function resolveProjectExpanded(
   projectExpandedById: Readonly<Record<string, boolean>>,
   preferenceKeys: readonly string[],
@@ -386,6 +406,7 @@ interface UiStateStore extends UiState {
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
+  setSidebarProjectScopeKey: (key: string | null) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
   reorderProjects: (
     currentProjectOrder: readonly string[],
@@ -404,6 +425,7 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
   setDefaultAdvertisedEndpointKey: (key) =>
     set((state) => setDefaultAdvertisedEndpointKey(state, key)),
+  setSidebarProjectScopeKey: (key) => set((state) => setSidebarProjectScopeKey(state, key)),
   setProjectExpanded: (projectIds, expanded) =>
     set((state) => setProjectExpanded(state, projectIds, expanded)),
   reorderProjects: (currentProjectOrder, draggedProjectIds, targetProjectIds) =>

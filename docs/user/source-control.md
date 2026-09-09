@@ -49,6 +49,7 @@ Open the **Git graph** surface from the right panel (the **+** menu on the panel
 - Click a commit to expand the files it changed; click a file to open its diff in the Diff panel
 - Use a commit's **⋯** menu to create a branch at that commit, or rename one of its local branches
 - Use **Load more** at the bottom to walk further back in history
+- The graph follows the project picked in the sidebar's project scope selector; on **All projects** it shows the current thread's project, and an open graph stays with you when you switch threads across projects
 
 ### Know Your Setup at a Glance
 

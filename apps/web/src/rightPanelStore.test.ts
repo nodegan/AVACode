@@ -177,6 +177,20 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("open can add a surface in the background without activating it", () => {
+    useRightPanelStore.getState().open(refA, "diff");
+    useRightPanelStore.getState().open(refA, "git-graph", { activate: false });
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "diff",
+      surfaces: [
+        { id: "diff", kind: "diff" },
+        { id: "git-graph", kind: "git-graph" },
+      ],
+    });
+  });
+
   it("replaces the standalone explorer with peer file surfaces", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().openFile(refA, "src/index.ts");

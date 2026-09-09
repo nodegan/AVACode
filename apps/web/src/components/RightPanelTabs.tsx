@@ -68,7 +68,7 @@ const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the AVA Code desktop app.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
-  "git-graph": "Git graph is only available for server threads in Git repositories.",
+  "git-graph": "Git graph is only available when a Git repository is open.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
