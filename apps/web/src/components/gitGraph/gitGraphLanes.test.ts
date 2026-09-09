@@ -12,6 +12,8 @@ describe("computeGitGraphLayout", () => {
 
     expect(layout.laneCount).toBe(1);
     expect(layout.rows.map((row) => row.lane)).toEqual([0, 0, 0]);
+    // The first row opens the lane: nothing enters its node from above.
+    expect(layout.rows[0]?.beforeLanes).toEqual([]);
     // The first parent's continuation is the node lane staying active, not an edge.
     expect(layout.rows.map((row) => row.downEdges)).toEqual([[], [], []]);
     expect(layout.rows[0]?.afterLanes).toEqual([{ lane: 0, colorIndex: 0 }]);
@@ -58,7 +60,34 @@ describe("computeGitGraphLayout", () => {
     expect(layout.rows[3]?.lane).toBe(0);
   });
 
-  it("reuses a freed lane for an unrelated tip", () => {
+  it("keeps the trunk on the left lane through a merge-back", () => {
+    const layout = computeGitGraphLayout([
+      { oid: "m7", parents: ["m6"] },
+      { oid: "m6", parents: ["m5"] },
+      { oid: "m5", parents: ["merge"] },
+      { oid: "merge", parents: ["m4", "f1b"] },
+      { oid: "f1b", parents: ["f1a"] },
+      { oid: "f1a", parents: ["m3"] },
+      { oid: "m4", parents: ["m3"] },
+      { oid: "m3", parents: ["m2"] },
+      { oid: "m2", parents: ["m1"] },
+      { oid: "m1", parents: [] },
+    ]);
+
+    // The feature branch opens lane 1 at the merge and merges back into the
+    // trunk: m4's first parent m3 is already expected on lane 1, so that
+    // expectation is re-homed into lane 0 and lane 1 shifts away.
+    expect(layout.rows[5]?.lane).toBe(1);
+    expect(layout.rows[6]?.downEdges).toEqual([
+      { fromLane: 1, toLane: 0, colorIndex: 1, kind: "shift" },
+    ]);
+    // Main continues on lane 0 for the rest of history instead of hopping
+    // right onto the freed lane's position.
+    expect(layout.rows.slice(6).map((row) => row.lane)).toEqual([0, 0, 0, 0]);
+    expect(layout.rows[9]?.afterLanes).toEqual([]);
+  });
+
+  it("compacts a freed lane leftward and reuses its position", () => {
     const layout = computeGitGraphLayout([
       { oid: "a1", parents: ["a0"] },
       { oid: "b0", parents: ["b-1"] },
@@ -68,10 +97,33 @@ describe("computeGitGraphLayout", () => {
 
     // a0 is still expected on lane 0, so b0 opens lane 1.
     expect(layout.rows[0]?.lane).toBe(0);
+    // b0 is a freshly opened tip: no line enters its node from above.
+    expect(layout.rows[1]?.beforeLanes).toEqual([{ lane: 0, colorIndex: 0 }]);
     expect(layout.rows[1]?.lane).toBe(1);
-    expect(layout.rows[2]?.lane).toBe(0);
-    expect(layout.rows[3]?.lane).toBe(1);
+    // When lane 0 ends, lane 1 shifts left with a visible transition rather
+    // than leaving a ghost gap on the left.
+    expect(layout.rows[2]?.downEdges).toEqual([
+      { fromLane: 1, toLane: 0, colorIndex: 1, kind: "shift" },
+    ]);
+    expect(layout.rows[2]?.afterLanes).toEqual([{ lane: 0, colorIndex: 1 }]);
+    expect(layout.rows[3]?.lane).toBe(0);
     expect(layout.laneCount).toBe(2);
+  });
+
+  it("gives a new branch a fresh color instead of a shifted lane's old one", () => {
+    const layout = computeGitGraphLayout([
+      { oid: "a1", parents: ["a0"] },
+      { oid: "b1", parents: ["b0"] },
+      { oid: "a0", parents: [] },
+      { oid: "c1", parents: ["c0"] },
+      { oid: "b0", parents: [] },
+      { oid: "c0", parents: [] },
+    ]);
+
+    // c1 opens a new lane after the compaction; its color must not collide
+    // with the neighboring branch's color.
+    expect(layout.rows[3]?.lane).toBe(1);
+    expect(layout.rows[3]?.colorIndex).toBe(2);
   });
 
   it("keeps dangling lanes visible for parents beyond the page", () => {

@@ -93,8 +93,20 @@ type GitGraphListItem =
       layout: GitGraphRowLayout;
       isHead: boolean;
     }
-  | { type: "commit-detail"; key: string; commit: GitGraphCommit }
-  | { type: "file-group"; key: string; oid: string; files: ReadonlyArray<GitGraphCommitFile> }
+  | {
+      type: "commit-detail";
+      key: string;
+      commit: GitGraphCommit;
+      layout: GitGraphRowLayout;
+      hasTaskSection: boolean;
+    }
+  | {
+      type: "file-group";
+      key: string;
+      oid: string;
+      files: ReadonlyArray<GitGraphCommitFile>;
+      layout: GitGraphRowLayout;
+    }
   | { type: "uncommitted-header"; key: string; files: VcsStatusResult["workingTree"]["files"] }
   | { type: "uncommitted-files"; key: string; files: VcsStatusResult["workingTree"]["files"] }
   | {
@@ -103,6 +115,7 @@ type GitGraphListItem =
       oid: string;
       branch: string;
       tasks: ReadonlyArray<Task>;
+      layout: GitGraphRowLayout;
     };
 
 const FILE_STATUS_PRESENTATION: Record<
@@ -163,20 +176,37 @@ function CommitSubject({ subject, className }: { subject: string; className?: st
   );
 }
 
+/**
+ * Width of a row's graph cell: hugs the row's own rightmost active lane, so
+ * rows with few live lanes keep their messages close to the lines even when
+ * older history spread across many lanes. Lines keep their global positions;
+ * only the cell's trailing padding varies.
+ */
+const rowGraphWidth = (row: GitGraphRowLayout): number =>
+  Math.max(
+    24,
+    Math.max(
+      row.lane,
+      ...row.beforeLanes.map((entry) => entry.lane),
+      ...row.afterLanes.map((entry) => entry.lane),
+      ...row.downEdges.map((edge) => Math.max(edge.fromLane, edge.toLane)),
+    ) *
+      GIT_GRAPH_LANE_SPACING +
+      19,
+  );
+
 function CommitGraphCell({
   layout,
-  laneCount,
   rowHeight,
   isTip,
   isHead,
 }: {
   layout: GitGraphRowLayout;
-  laneCount: number;
   rowHeight: number;
   isTip: boolean;
   isHead: boolean;
 }) {
-  const width = Math.max(44, laneCount * GIT_GRAPH_LANE_SPACING + 14);
+  const width = rowGraphWidth(layout);
   const laneX = (lane: number) => 10 + lane * GIT_GRAPH_LANE_SPACING;
   const midY = rowHeight / 2;
   const nodeX = laneX(layout.lane);
@@ -192,9 +222,14 @@ function CommitGraphCell({
       className="shrink-0"
       aria-hidden="true"
     >
-      {/* Through lanes: active entering lines that continue past this node. */}
+      {/* Through lanes: active entering lines that keep their position past
+          this node; lines that moved left render as shift edges below. */}
       {layout.beforeLanes
-        .filter((entry) => entry.lane !== layout.lane)
+        .filter(
+          (entry) =>
+            entry.lane !== layout.lane &&
+            layout.afterLanes.some((after) => after.lane === entry.lane),
+        )
         .map(({ lane, colorIndex }) => (
           <line
             key={`through:${lane}`}
@@ -214,34 +249,26 @@ function CommitGraphCell({
       {nodeLaneAfter ? (
         <line x1={nodeX} y1={midY} x2={nodeX} y2={rowHeight} stroke={nodeColor} strokeWidth={2} />
       ) : null}
-      {/* Curved connections to other lanes, terminating on the band bottom. */}
+      {/* Curved connections terminating on the band bottom: node edges start
+          at the node, shift edges span the whole band. */}
       {layout.downEdges.map((edge) => {
         const x1 = laneX(edge.fromLane);
         const x2 = laneX(edge.toLane);
+        const y1 = edge.kind === "shift" ? 0 : midY;
         const controlOffset = rowHeight * 0.45;
         return (
           <path
             key={`${edge.kind}:${edge.fromLane}:${edge.toLane}`}
-            d={`M ${x1} ${midY} C ${x1} ${midY + controlOffset}, ${x2} ${rowHeight - controlOffset}, ${x2} ${rowHeight}`}
+            d={`M ${x1} ${y1} C ${x1} ${y1 + controlOffset}, ${x2} ${rowHeight - controlOffset}, ${x2} ${rowHeight}`}
             fill="none"
             stroke={laneColor(edge.colorIndex)}
             strokeWidth={2}
           />
         );
       })}
-      {/* Branch tips read at a glance: a hollow, color-bordered node on the
-          row's tonal background; HEAD gets the heaviest variant. */}
-      {isTip ? (
-        <circle
-          cx={nodeX}
-          cy={midY}
-          r={isHead ? 7 : 6}
-          fill="transparent"
-          stroke={nodeColor}
-          strokeWidth={isHead ? 2.5 : 2}
-        />
-      ) : null}
-      <circle cx={nodeX} cy={midY} r={isTip ? 3 : 2} fill={nodeColor} opacity={isTip ? 1 : 0.45} />
+      {/* Every commit is a solid node in its lane's color; branch tips grow a
+          larger node, HEAD the largest. */}
+      <circle cx={nodeX} cy={midY} r={isTip ? (isHead ? 7 : 6) : 4} fill={nodeColor} />
     </svg>
   );
 }
@@ -316,9 +343,6 @@ export default function GitGraphPanel({
     };
   }, [prepared, taskLinksVersion]);
 
-  // A clicked task chip reveals that branch's linked tasks in place.
-  const [revealedTask, setRevealedTask] = useState<{ oid: string; branch: string } | null>(null);
-
   const tasksByBranch = useMemo(() => {
     const map = new Map<string, Task[]>();
     for (const task of linkedTasks) {
@@ -346,7 +370,8 @@ export default function GitGraphPanel({
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
 
   const layout = useMemo(() => computeGitGraphLayout(commits), [commits]);
-  const laneCount = Math.max(layout.laneCount, 1);
+  // The uncommitted rows sit above the tip commit, so they share its indent.
+  const headMessageIndent = layout.rows[0] ? rowGraphWidth(layout.rows[0]) + 10 : 34;
 
   const listItems = useMemo<GitGraphListItem[]>(() => {
     const items: GitGraphListItem[] = [];
@@ -363,6 +388,7 @@ export default function GitGraphPanel({
     layout.rows.forEach((row, index) => {
       const commit = commits[index];
       if (!commit) return;
+      const expanded = commit.oid === expandedOid;
       items.push({
         type: "commit",
         key: `commit:${commit.oid}`,
@@ -370,22 +396,37 @@ export default function GitGraphPanel({
         layout: row,
         isHead: commit.oid === headOid,
       });
-      if (commit.oid === expandedOid) {
-        items.push({ type: "commit-detail", key: `detail:${commit.oid}`, commit });
-        const files = commitFilesQuery.data?.files ?? [];
-        if (files.length > 0) {
-          items.push({ type: "file-group", key: `files:${commit.oid}`, oid: commit.oid, files });
-        }
-      }
-      if (revealedTask !== null && revealedTask.oid === commit.oid) {
-        const tasks = tasksByBranch.get(revealedTask.branch) ?? [];
-        if (tasks.length > 0) {
+      if (expanded) {
+        // Linked tasks lead the expanded card, one section per branch ref.
+        const taskRefs = commit.refs.filter(
+          (ref) => ref.kind === "local" && (tasksByBranch.get(ref.name) ?? []).length > 0,
+        );
+        for (const ref of taskRefs) {
+          const tasks = tasksByBranch.get(ref.name) ?? [];
           items.push({
             type: "task-branches",
-            key: `task-branches:${commit.oid}:${revealedTask.branch}`,
+            key: `task-branches:${commit.oid}:${ref.name}`,
             oid: commit.oid,
-            branch: revealedTask.branch,
+            branch: ref.name,
             tasks,
+            layout: row,
+          });
+        }
+        items.push({
+          type: "commit-detail",
+          key: `detail:${commit.oid}`,
+          commit,
+          layout: row,
+          hasTaskSection: taskRefs.length > 0,
+        });
+        const files = commitFilesQuery.data?.files ?? [];
+        if (files.length > 0) {
+          items.push({
+            type: "file-group",
+            key: `files:${commit.oid}`,
+            oid: commit.oid,
+            files,
+            layout: row,
           });
         }
       }
@@ -399,7 +440,6 @@ export default function GitGraphPanel({
     headOid,
     layout.rows,
     linkedTasks,
-    revealedTask,
     uncommittedExpanded,
     uncommittedFiles,
   ]);
@@ -610,7 +650,7 @@ export default function GitGraphPanel({
             onClick={() => setUncommittedExpanded((current) => !current)}
             aria-expanded={uncommittedExpanded}
             className="flex w-full min-w-0 items-center gap-1.5 rounded-lg py-1.5 pr-4 text-left transition-colors focus-visible:bg-accent/50 hover:bg-accent/50 focus-visible:outline-none"
-            style={{ paddingLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
+            style={{ paddingLeft: headMessageIndent }}
           >
             <ChevronDownIcon
               className={cn(
@@ -635,7 +675,7 @@ export default function GitGraphPanel({
               <div
                 key={file.path}
                 className="flex h-7 w-full min-w-0 items-center gap-2 pr-2 text-left text-xs"
-                style={{ paddingLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
+                style={{ paddingLeft: headMessageIndent }}
               >
                 <span className="min-w-0 truncate text-foreground/90">{file.path}</span>
                 {file.insertions + file.deletions > 0 ? (
@@ -658,8 +698,11 @@ export default function GitGraphPanel({
         return (
           <div
             key={item.key}
-            className="my-1 mr-4 space-y-1.5 rounded-lg border border-border/70 bg-muted/30 p-2.5"
-            style={{ marginLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
+            className={cn(
+              "mr-4 space-y-1.5 border border-border/70 bg-muted/30 p-2.5",
+              item.hasTaskSection ? "mb-1 rounded-b-lg border-t-0" : "mt-2 mb-1 rounded-lg",
+            )}
+            style={{ marginLeft: rowGraphWidth(item.layout) + 10 }}
           >
             <p className="text-xs leading-5 break-words whitespace-pre-wrap text-foreground">
               {item.commit.subject}
@@ -690,8 +733,9 @@ export default function GitGraphPanel({
           <div
             key={item.key}
             className="my-1 mr-4 rounded-lg py-1"
-            style={{ marginLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
+            style={{ marginLeft: rowGraphWidth(item.layout) + 10 }}
           >
+            <p className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">Changes</p>
             {item.files.map((file) => {
               const presentation = FILE_STATUS_PRESENTATION[file.status];
               return (
@@ -726,14 +770,14 @@ export default function GitGraphPanel({
         return (
           <div
             key={item.key}
-            className="mb-1 max-w-lg rounded-lg border border-emerald-500/30 bg-emerald-500/[0.06] p-2"
-            style={{ marginLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
+            className="mt-2 mr-4 rounded-t-lg border border-b-0 border-border/70 bg-muted/30 p-2.5"
+            style={{ marginLeft: rowGraphWidth(item.layout) + 10 }}
           >
-            <p className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-              <GitBranchIcon className="size-3 shrink-0" />
-              <span className="min-w-0 truncate">
-                {item.branch} ·{" "}
-                {item.tasks.length === 1 ? "1 linked task" : `${item.tasks.length} linked tasks`}
+            <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <GitBranchIcon className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span className="min-w-0 truncate">{item.branch}</span>
+              <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+                · {item.tasks.length === 1 ? "1 linked task" : `${item.tasks.length} linked tasks`}
               </span>
             </p>
             <div className="mt-1.5 space-y-1.5">
@@ -793,7 +837,7 @@ export default function GitGraphPanel({
         >
           <button
             type="button"
-            className="group flex min-h-full min-w-0 flex-1 cursor-pointer items-center gap-2 text-left focus-visible:outline-none"
+            className="group flex min-h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left focus-visible:outline-none"
             style={{ paddingLeft: 4 }}
             onClick={() =>
               setExpandedOid((current) => (current === commit.oid ? null : commit.oid))
@@ -804,7 +848,6 @@ export default function GitGraphPanel({
             <span className="relative shrink-0">
               <CommitGraphCell
                 layout={item.layout}
-                laneCount={laneCount}
                 rowHeight={GIT_GRAPH_ROW_HEIGHT}
                 isTip={isBranchTip}
                 isHead={item.isHead}
@@ -829,29 +872,15 @@ export default function GitGraphPanel({
                     )
                     .map((ref) => {
                       const branchTasks = tasksByBranch.get(ref.name) ?? [];
-                      const revealed =
-                        revealedTask?.branch === ref.name && revealedTask.oid === commit.oid;
                       return (
-                        <button
+                        <span
                           key={`tasks:${ref.name}`}
-                          type="button"
                           title={branchTasks.map((task) => task.title).join("\n")}
-                          className={cn(
-                            "inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-xs font-medium leading-none text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-300",
-                            revealed && "ring-1 ring-current/40",
-                          )}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setRevealedTask((current) =>
-                              current?.branch === ref.name && current.oid === commit.oid
-                                ? null
-                                : { oid: commit.oid, branch: ref.name },
-                            );
-                          }}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-xs font-medium leading-none text-emerald-700 dark:text-emerald-300"
                         >
                           <ListTodoIcon className="size-3" />
                           {branchTasks.length}
-                        </button>
+                        </span>
                       );
                     })}
                   {item.isHead ? (
@@ -953,7 +982,7 @@ export default function GitGraphPanel({
     [
       currentRefName,
       expandedOid,
-      laneCount,
+      headMessageIndent,
       onOpenCommitFile,
       onOpenTask,
       openCreateDialog,
@@ -961,7 +990,6 @@ export default function GitGraphPanel({
       openRenameDialog,
       handleBranchSwitch,
       handleCommitContextMenu,
-      revealedTask,
       settings.timestampFormat,
       tasksByBranch,
       uncommittedExpanded,
