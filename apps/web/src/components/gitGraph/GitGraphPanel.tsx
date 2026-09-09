@@ -27,6 +27,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { LegendList } from "@legendapp/list/react";
@@ -147,7 +148,11 @@ function CommitSubject({ subject, className }: { subject: string; className?: st
         {type}
         {breaking}
       </span>
-      {scope ? <span className="shrink-0">{scope}</span> : null}
+      {scope ? (
+        <span className="shrink-0 rounded-sm bg-zinc-500/15 px-1 py-px text-[10px] font-medium leading-4 text-zinc-700 dark:text-zinc-300">
+          {scope}
+        </span>
+      ) : null}
       <span className="min-w-0 truncate">{message}</span>
     </span>
   );
@@ -260,6 +265,7 @@ export default function GitGraphPanel({
   const [dialog, setDialog] = useState<GitGraphDialog | null>(null);
   const [branchName, setBranchName] = useState("");
   const [dialogPending, setDialogPending] = useState(false);
+  const switchInFlightRef = useRef(false);
 
   const graphLogQuery = useEnvironmentQuery(
     gitEnvironment.graphLog({ environmentId, input: { cwd, limit } }),
@@ -331,6 +337,7 @@ export default function GitGraphPanel({
   const createRef = useAtomCommand(vcsEnvironment.createRef, { reportFailure: false });
   const renameBranch = useAtomCommand(vcsEnvironment.renameBranch, { reportFailure: false });
   const deleteRef = useAtomCommand(vcsEnvironment.deleteRef, { reportFailure: false });
+  const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
 
   const layout = useMemo(() => computeGitGraphLayout(commits), [commits]);
   const laneCount = Math.max(layout.laneCount, 1);
@@ -444,6 +451,36 @@ export default function GitGraphPanel({
       }
     },
     [currentRefName, openCreateDialog, openDeleteDialog, openRenameDialog],
+  );
+
+  const handleBranchSwitch = useCallback(
+    async (branch: string) => {
+      if (branch === currentRefName || switchInFlightRef.current) return;
+      switchInFlightRef.current = true;
+      try {
+        const result = await switchRef({
+          environmentId,
+          input: { cwd, refName: branch },
+        });
+        if (result._tag !== "Success") {
+          if (!isAtomCommandInterrupted(result)) {
+            const cause = squashAtomCommandFailure(result);
+            toastManager.add({
+              type: "error",
+              title: "Failed to switch branch",
+              description: cause instanceof Error ? cause.message : "An error occurred.",
+            });
+          }
+          return;
+        }
+        toastManager.add({ type: "success", title: "Branch switched", description: branch });
+        graphLogQuery.refresh();
+        statusQuery.refresh();
+      } finally {
+        switchInFlightRef.current = false;
+      }
+    },
+    [currentRefName, cwd, environmentId, graphLogQuery, statusQuery, switchRef],
   );
 
   const submitDialog = useCallback(() => {
@@ -703,6 +740,9 @@ export default function GitGraphPanel({
 
       const { commit } = item;
       const isBranchTip = commit.refs.some((ref) => ref.kind !== "tag");
+      const isCurrentBranchTip = commit.refs.some(
+        (ref) => ref.kind === "local" && ref.name === currentRefName,
+      );
       const laneTint = laneColor(item.layout.colorIndex);
       const isExpanded = expandedOid === commit.oid;
       return (
@@ -730,9 +770,50 @@ export default function GitGraphPanel({
                 isHead={item.isHead}
               />
             </span>
-            <span className="flex min-w-0 flex-1 flex-col justify-center rounded-lg py-1 pr-1 transition-colors group-focus-visible:bg-accent/50 group-hover:bg-accent/50">
+            <span
+              className="flex min-w-0 flex-1 flex-col justify-center rounded-lg py-1 pr-1 transition-colors group-focus-visible:bg-accent/50 group-hover:bg-accent/50"
+              style={
+                isCurrentBranchTip
+                  ? {
+                      boxShadow: `inset 0 0 0 9999px color-mix(in srgb, ${laneTint} 7%, transparent)`,
+                    }
+                  : undefined
+              }
+            >
               <span className="flex max-w-full min-w-0 flex-col self-start rounded-lg px-2 py-1">
                 <span className="flex min-w-0 items-center gap-1.5">
+                  {commit.refs
+                    .filter(
+                      (ref) =>
+                        ref.kind === "local" && (tasksByBranch.get(ref.name) ?? []).length > 0,
+                    )
+                    .map((ref) => {
+                      const branchTasks = tasksByBranch.get(ref.name) ?? [];
+                      const revealed =
+                        revealedTask?.branch === ref.name && revealedTask.oid === commit.oid;
+                      return (
+                        <button
+                          key={`tasks:${ref.name}`}
+                          type="button"
+                          title={branchTasks.map((task) => task.title).join("\n")}
+                          className={cn(
+                            "inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-xs font-medium leading-none text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-300",
+                            revealed && "ring-1 ring-current/40",
+                          )}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setRevealedTask((current) =>
+                              current?.branch === ref.name && current.oid === commit.oid
+                                ? null
+                                : { oid: commit.oid, branch: ref.name },
+                            );
+                          }}
+                        >
+                          <ListTodoIcon className="size-3" />
+                          {branchTasks.length}
+                        </button>
+                      );
+                    })}
                   {item.isHead ? (
                     <span className="shrink-0 rounded-sm bg-foreground px-1 py-px font-mono text-[10px] font-medium tracking-wide text-background uppercase">
                       HEAD
@@ -744,17 +825,43 @@ export default function GitGraphPanel({
                         className={cn(
                           "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs font-medium leading-none",
                           ref.kind === "local"
-                            ? "border-primary/40 bg-primary/15 text-primary"
+                            ? ref.name === currentRefName
+                              ? "border-transparent font-semibold text-white"
+                              : "cursor-pointer border-primary/40 bg-primary/15 text-primary"
                             : ref.kind === "tag"
                               ? "border-border/70 bg-transparent text-muted-foreground"
                               : "border-transparent bg-transparent",
                         )}
                         style={
-                          ref.kind === "remote"
+                          ref.kind === "local" && ref.name === currentRefName
                             ? {
-                                borderColor: laneTint,
-                                backgroundColor: `color-mix(in srgb, ${laneTint} 12%, transparent)`,
-                                color: laneTint,
+                                backgroundColor: `color-mix(in srgb, ${laneTint} 85%, black)`,
+                              }
+                            : ref.kind === "remote"
+                              ? {
+                                  borderColor: laneTint,
+                                  backgroundColor: `color-mix(in srgb, ${laneTint} 12%, transparent)`,
+                                  color: laneTint,
+                                }
+                              : undefined
+                        }
+                        title={
+                          ref.kind === "local" && ref.name !== currentRefName
+                            ? `Double-click to switch to ${ref.name}`
+                            : undefined
+                        }
+                        onDoubleClick={
+                          ref.kind === "local" && ref.name !== currentRefName
+                            ? (event) => {
+                                event.stopPropagation();
+                                void handleBranchSwitch(ref.name);
+                              }
+                            : undefined
+                        }
+                        onClick={
+                          ref.kind === "local"
+                            ? (event) => {
+                                event.stopPropagation();
                               }
                             : undefined
                         }
@@ -766,47 +873,6 @@ export default function GitGraphPanel({
                         )}
                         {ref.name}
                       </span>
-                      {(ref.kind === "local" ? (tasksByBranch.get(ref.name) ?? []) : []).length > 0
-                        ? (() => {
-                            const branchTasks = tasksByBranch.get(ref.name) ?? [];
-                            const revealed =
-                              revealedTask?.branch === ref.name && revealedTask.oid === commit.oid;
-                            const single = branchTasks.length === 1 ? branchTasks[0] : null;
-                            return (
-                              <button
-                                type="button"
-                                title={branchTasks.map((task) => task.title).join("\n")}
-                                className={cn(
-                                  "inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-xs font-medium leading-none text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-300",
-                                  revealed && "ring-1 ring-current/40",
-                                )}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setRevealedTask((current) =>
-                                    current?.branch === ref.name && current.oid === commit.oid
-                                      ? null
-                                      : { oid: commit.oid, branch: ref.name },
-                                  );
-                                }}
-                              >
-                                <ListTodoIcon className="size-3" />
-                                {single ? (
-                                  <CommitSubject
-                                    subject={commit.subject}
-                                    className={cn(
-                                      "text-sm",
-                                      isBranchTip
-                                        ? "text-foreground"
-                                        : "text-foreground/60 group-hover:text-foreground",
-                                    )}
-                                  />
-                                ) : (
-                                  <span>{branchTasks.length} linked tasks</span>
-                                )}
-                              </button>
-                            );
-                          })()
-                        : null}
                     </Fragment>
                   ))}
                   <CommitSubject
@@ -853,6 +919,7 @@ export default function GitGraphPanel({
       openCreateDialog,
       openDeleteDialog,
       openRenameDialog,
+      handleBranchSwitch,
       handleCommitContextMenu,
       revealedTask,
       settings.timestampFormat,
@@ -865,12 +932,7 @@ export default function GitGraphPanel({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b border-border/70 px-2 py-1">
-        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          {hasData && !graphLogQuery.isPending
-            ? `${commits.length}${graphLogQuery.data?.nextCursor !== null ? "+" : ""} commits · all branches`
-            : "Git graph"}
-        </span>
+      <div className="flex shrink-0 items-center justify-end gap-1 border-b border-border/70 px-2 py-1">
         <Button
           type="button"
           size="icon-sm"
