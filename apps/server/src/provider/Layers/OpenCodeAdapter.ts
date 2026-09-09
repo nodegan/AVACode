@@ -196,12 +196,21 @@ function openCodeEventSessionId(event: OpenCodeSubscribedEvent): string | undefi
   return info && typeof info.id === "string" ? info.id : undefined;
 }
 
+// OpenCode stamps untitled sessions with a timestamp placeholder and only
+// replaces it once a real title is generated. Adopting the placeholder would
+// clobber the thread title on every fresh session.
+const OPENCODE_UNTITLED_SESSION_TITLE_PATTERN =
+  /^(?:New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
 function openCodeEventSessionTitle(event: OpenCodeSubscribedEvent): string | undefined {
   if (event.type !== "session.updated") {
     return undefined;
   }
 
-  return trimText(event.properties.info.title);
+  const title = trimText(event.properties.info.title);
+  return title !== undefined && !OPENCODE_UNTITLED_SESSION_TITLE_PATTERN.test(title)
+    ? title
+    : undefined;
 }
 
 interface OpenCodeSessionContext {
