@@ -63,6 +63,8 @@ interface ClickUpTaskResponse {
   readonly url?: string | null;
   readonly date_created?: string | number | null;
   readonly date_updated?: string | number | null;
+  /** The parent task's id for subtasks; null on top-level tasks. */
+  readonly parent?: string | number | null;
   readonly status?: {
     readonly status?: string;
     readonly type?: string;
@@ -304,6 +306,12 @@ export function mapClickUpComments(
   );
 }
 
+/** The parent task id (ClickUp subtasks); absent, empty, or "0" means none. */
+export function clickUpParentTaskId(task: ClickUpTaskResponse): string | null {
+  const id = task.parent == null ? "" : String(task.parent).trim();
+  return id.length === 0 || id === "0" ? null : id;
+}
+
 /** Map a raw ClickUp task payload onto the provider-neutral snapshot. */
 export function mapClickUpTaskSnapshot(task: ClickUpTaskResponse): ProviderTaskSnapshot | null {
   const externalTaskId = task.id == null ? null : String(task.id).trim();
@@ -327,6 +335,7 @@ export function mapClickUpTaskSnapshot(task: ClickUpTaskResponse): ProviderTaskS
     externalListName: listRef.externalListName,
     externalFolderId: folderRef.externalFolderId,
     externalFolderName: folderRef.externalFolderName,
+    externalParentTaskId: clickUpParentTaskId(task),
     assignees: clickUpAssignees(task),
     externalCreatedAt: parseClickUpTimestamp(task.date_created),
     externalUpdatedAt: parseClickUpTimestamp(task.date_updated),

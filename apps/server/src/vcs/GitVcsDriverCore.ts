@@ -269,18 +269,23 @@ function parseGitGraphLogRecords(stdout: string, truncated: boolean): Array<GitG
   for (const record of stdout.split("\x1e")) {
     const fields = record.startsWith("\n") ? record.slice(1) : record;
     if (fields.length === 0) continue;
-    const [oid, parentsRaw, decorations, authorName, timestampRaw, subject] = fields.split("\x00");
+    const [oid, parentsRaw, decorations, authorName, authorEmail, timestampRaw, subject, body] =
+      fields.split("\x00");
     if (oid === undefined || parentsRaw === undefined || timestampRaw === undefined) continue;
     if (!GIT_GRAPH_COMMIT_OID_PATTERN.test(oid)) continue;
     const timestamp = Number.parseInt(timestampRaw, 10);
     if (!Number.isFinite(timestamp) || timestamp < 0) continue;
+    // `%b` expands with a trailing newline; a body without content stays absent.
+    const trimmedBody = (body ?? "").trimEnd();
     commits.push({
       oid,
       parents: parentsRaw.split(" ").filter((parent) => parent.length > 0),
       refs: parseGitGraphDecorations(decorations ?? ""),
       authorName: authorName ?? "",
+      ...(authorEmail && authorEmail.length > 0 ? { authorEmail } : {}),
       timestamp,
       subject: subject ?? "",
+      ...(trimmedBody.length > 0 ? { body: trimmedBody } : {}),
     });
   }
   // A truncated tail can still decode into a plausible record; drop it.
@@ -2264,7 +2269,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "--decorate-refs=refs/tags",
         `--max-count=${limit + 1}`,
         ...(skip > 0 ? [`--skip=${skip}`] : []),
-        "--format=%H%x00%P%x00%D%x00%an%x00%at%x00%s%x1e",
+        "--format=%H%x00%P%x00%D%x00%an%x00%ae%x00%at%x00%s%x00%b%x1e",
       ];
       const result = yield* executeGit("GitVcsDriver.gitGraphLog", input.cwd, logArgs, {
         allowNonZeroExit: true,

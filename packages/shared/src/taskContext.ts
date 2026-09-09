@@ -104,9 +104,20 @@ function formatNoteLines(notes: ReadonlyArray<TaskNote>): Array<string> {
   return lines;
 }
 
+function formatSubtaskLines(subtasks: ReadonlyArray<Task>): Array<string> {
+  if (subtasks.length === 0) return [];
+  const lines: Array<string> = ["### Subtasks"];
+  for (const subtask of subtasks) {
+    lines.push(`- [${taskStatusLabel(subtask)}] ${subtask.title}`);
+  }
+  return lines;
+}
+
 export interface TaskContextExtras {
   /** Threaded provider comments, oldest first, as served by the tasks API. */
   readonly comments?: ReadonlyArray<TaskComment>;
+  /** The task's secondary tasks (provider subtasks), freshest last. */
+  readonly subtasks?: ReadonlyArray<Task>;
 }
 
 /**
@@ -121,10 +132,14 @@ export function formatTaskContext(task: Task, extras?: TaskContextExtras): strin
   const meta: Array<string> = [`Status: ${taskStatusLabel(task)}`];
   if (task.listName) meta.push(`List: ${task.listName}`);
   if (task.assignees.length > 0) meta.push(`Assignees: ${task.assignees.join(", ")}`);
+  if (task.parentTaskTitle) meta.push(`Parent task: ${task.parentTaskTitle}`);
   lines.push(...meta, "");
 
   if (task.description) lines.push(task.description.trim(), "");
   if (task.externalUrl) lines.push(`Source: ${task.externalUrl}`, "");
+
+  const visibleSubtasks = (extras?.subtasks ?? []).slice(-TASK_CONTEXT_MAX_ENTRIES);
+  lines.push(...formatSubtaskLines(visibleSubtasks));
 
   const visibleComments = (extras?.comments ?? []).slice(-TASK_CONTEXT_MAX_ENTRIES);
   lines.push(...formatCommentLines(visibleComments, "Provider"));

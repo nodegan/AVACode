@@ -72,8 +72,11 @@ interface TaskRow {
   readonly linkedBranchesJson: string | null;
   readonly listId: string | null;
   readonly listName: string | null;
+  readonly parentTaskId: string | null;
+  readonly parentTaskTitle: string | null;
   readonly externalTaskId: string | null;
   readonly externalCustomId: string | null;
+  readonly externalParentTaskId: string | null;
   readonly externalUrl: string | null;
   readonly assigneesJson: string;
   readonly syncedAt: string | null;
@@ -82,8 +85,8 @@ interface TaskRow {
   readonly updatedAt: string;
 }
 
-/** Write-shaped task row; listName is derived by join on read, never stored. */
-type TaskUpsertRow = Omit<TaskRow, "listName">;
+/** Write-shaped task row; listName and the parent resolution are derived by join on read, never stored. */
+type TaskUpsertRow = Omit<TaskRow, "listName" | "parentTaskId" | "parentTaskTitle">;
 
 interface TaskNoteRow {
   readonly id: string;
@@ -133,6 +136,7 @@ interface NormalizedTaskQueryFilter {
   readonly linkedThreadId: string | null;
   readonly linkedBranchName: string | null;
   readonly query: string | null;
+  readonly parentTaskId: string | null;
   readonly page: number;
   readonly pageSize: number;
 }
@@ -217,6 +221,8 @@ function mapTaskRow(row: TaskRow, notes: ReadonlyArray<TaskNote>): Task {
     linkedBranches: parseJsonArray(row.linkedBranchesJson),
     listId: row.listId,
     listName: row.listName,
+    parentTaskId: row.parentTaskId,
+    parentTaskTitle: row.parentTaskTitle,
     externalTaskId: row.externalTaskId,
     externalCustomId: row.externalCustomId,
     externalUrl: row.externalUrl,
@@ -362,6 +368,7 @@ const make = Effect.gen(function* () {
       assignees: dedupe(filter?.assignees ?? []),
       linkedThreadId: filter?.linkedThreadId?.trim() || null,
       linkedBranchName: filter?.linkedBranchName?.trim() || null,
+      parentTaskId: filter?.parentTaskId?.trim() || null,
       query: filter?.query?.trim() || null,
       page: Math.max(1, Math.floor(filter?.page ?? 1)),
       pageSize: Math.min(
@@ -395,7 +402,7 @@ const make = Effect.gen(function* () {
       clauses.push(scopeClause);
     }
     if (filter.statuses.length > 0) {
-      clauses.push(sql.in("status_category", filter.statuses));
+      clauses.push(sql.in("tasks.status_category", filter.statuses));
     }
     if (filter.assignees.length > 0) {
       clauses.push(
@@ -406,13 +413,25 @@ const make = Effect.gen(function* () {
       );
     }
     if (filter.linkedThreadId) {
-      clauses.push(sql`linked_thread_id = ${filter.linkedThreadId}`);
+      clauses.push(sql`tasks.linked_thread_id = ${filter.linkedThreadId}`);
     }
     if (filter.linkedBranchName) {
       clauses.push(
         sql`EXISTS (
           SELECT 1 FROM json_each(tasks.linked_branches) AS branch
           WHERE branch.value = ${filter.linkedBranchName}
+        )`,
+      );
+    }
+    if (filter.parentTaskId) {
+      // Children match through their parent's (provider, external id) identity,
+      // so a child row never needs its parent's local id written down.
+      clauses.push(
+        sql`EXISTS (
+          SELECT 1 FROM tasks AS parent_task
+          WHERE parent_task.task_id = ${filter.parentTaskId}
+            AND tasks.provider = parent_task.provider
+            AND tasks.external_parent_task_id = parent_task.external_task_id
         )`,
       );
     }
@@ -451,8 +470,11 @@ const make = Effect.gen(function* () {
       tasks.linked_branches AS "linkedBranchesJson",
       tasks.list_id AS "listId",
       task_lists.name AS "listName",
+      parent_task.task_id AS "parentTaskId",
+      parent_task.title AS "parentTaskTitle",
       tasks.external_task_id AS "externalTaskId",
       tasks.external_custom_id AS "externalCustomId",
+      tasks.external_parent_task_id AS "externalParentTaskId",
       tasks.external_url AS "externalUrl",
       tasks.assignees_json AS "assigneesJson",
       tasks.synced_at AS "syncedAt",
@@ -461,6 +483,11 @@ const make = Effect.gen(function* () {
       tasks.updated_at AS "updatedAt"
     FROM tasks
     LEFT JOIN task_lists ON task_lists.list_id = tasks.list_id
+    -- The parent's local id/title resolve at read time from the provider's
+    -- own parent reference; the unique external identity keeps this at most
+    -- one row, and unmatched children just resolve to null.
+    LEFT JOIN tasks AS parent_task ON parent_task.provider = tasks.provider
+      AND parent_task.external_task_id = tasks.external_parent_task_id
   `;
 
   const listFilteredTasks = (where: Fragment, page: number, pageSize: number) =>
@@ -579,7 +606,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const rows = yield* sql<TaskRow>`
         ${taskRowSelection}
-        WHERE task_id = ${taskId}
+        WHERE tasks.task_id = ${taskId}
       `;
       const row = rows[0];
       if (!row) {
@@ -665,6 +692,7 @@ const make = Effect.gen(function* () {
         list_id,
         external_task_id,
         external_custom_id,
+        external_parent_task_id,
         external_url,
         assignees_json,
         synced_at,
@@ -686,6 +714,7 @@ const make = Effect.gen(function* () {
         ${row.listId},
         ${row.externalTaskId},
         ${row.externalCustomId},
+        ${row.externalParentTaskId},
         ${row.externalUrl},
         ${row.assigneesJson},
         ${row.syncedAt},
@@ -707,6 +736,7 @@ const make = Effect.gen(function* () {
         list_id = excluded.list_id,
         external_task_id = excluded.external_task_id,
         external_custom_id = excluded.external_custom_id,
+        external_parent_task_id = excluded.external_parent_task_id,
         external_url = excluded.external_url,
         assignees_json = excluded.assignees_json,
         synced_at = excluded.synced_at,
@@ -904,6 +934,7 @@ const make = Effect.gen(function* () {
         listId: input.listId ?? null,
         externalTaskId: null,
         externalCustomId: null,
+        externalParentTaskId: null,
         externalUrl: null,
         assigneesJson: stringifyJsonArray([]),
         syncedAt: null,
@@ -1051,6 +1082,7 @@ const make = Effect.gen(function* () {
         listId: current.listId,
         externalTaskId: current.externalTaskId,
         externalCustomId: current.externalCustomId,
+        externalParentTaskId: current.externalParentTaskId,
         externalUrl: current.externalUrl,
         assigneesJson: current.assigneesJson,
         syncedAt: current.syncedAt,
@@ -1654,6 +1686,10 @@ const make = Effect.gen(function* () {
           listId,
           externalTaskId: snapshot.externalTaskId,
           externalCustomId: snapshot.externalCustomId ?? existing?.existingCustomId ?? null,
+          // The parent link is the provider's fact; a fresh sync that drops it
+          // (task detached at the provider) clears it rather than keeping the
+          // stale association.
+          externalParentTaskId: snapshot.externalParentTaskId,
           externalUrl: snapshot.externalUrl,
           assigneesJson: stringifyJsonArray(snapshot.assignees),
           syncedAt,

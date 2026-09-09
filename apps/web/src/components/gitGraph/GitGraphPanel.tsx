@@ -33,7 +33,11 @@ import {
 import { LegendList } from "@legendapp/list/react";
 
 import { computeGitGraphLayout, type GitGraphRowLayout } from "./gitGraphLanes";
-import { formatShortDate, formatShortTimestamp } from "../../timestampFormat";
+import {
+  formatChatTimestampTooltip,
+  formatShortDate,
+  formatShortTimestamp,
+} from "../../timestampFormat";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -89,6 +93,7 @@ type GitGraphListItem =
       layout: GitGraphRowLayout;
       isHead: boolean;
     }
+  | { type: "commit-detail"; key: string; commit: GitGraphCommit }
   | { type: "file-group"; key: string; oid: string; files: ReadonlyArray<GitGraphCommitFile> }
   | { type: "uncommitted-header"; key: string; files: VcsStatusResult["workingTree"]["files"] }
   | { type: "uncommitted-files"; key: string; files: VcsStatusResult["workingTree"]["files"] }
@@ -366,6 +371,7 @@ export default function GitGraphPanel({
         isHead: commit.oid === headOid,
       });
       if (commit.oid === expandedOid) {
+        items.push({ type: "commit-detail", key: `detail:${commit.oid}`, commit });
         const files = commitFilesQuery.data?.files ?? [];
         if (files.length > 0) {
           items.push({ type: "file-group", key: `files:${commit.oid}`, oid: commit.oid, files });
@@ -642,6 +648,39 @@ export default function GitGraphPanel({
                 ) : null}
               </div>
             ))}
+          </div>
+        );
+      }
+
+      if (item.type === "commit-detail") {
+        const body = item.commit.body ?? "";
+        const dateIso = new Date(item.commit.timestamp * 1000).toISOString();
+        return (
+          <div
+            key={item.key}
+            className="my-1 mr-4 space-y-1.5 rounded-lg border border-border/70 bg-muted/30 p-2.5"
+            style={{ marginLeft: Math.max(52, laneCount * GIT_GRAPH_LANE_SPACING + 26) }}
+          >
+            <p className="text-xs leading-5 break-words whitespace-pre-wrap text-foreground">
+              {item.commit.subject}
+            </p>
+            {body.length > 0 ? (
+              <p className="text-xs leading-5 break-words whitespace-pre-wrap text-muted-foreground">
+                {body}
+              </p>
+            ) : null}
+            <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground/80">
+              <span className="truncate">{item.commit.authorName}</span>
+              {item.commit.authorEmail ? (
+                <span className="truncate">&lt;{item.commit.authorEmail}&gt;</span>
+              ) : null}
+              <span aria-hidden="true">·</span>
+              <span className="shrink-0">
+                {formatChatTimestampTooltip(dateIso, settings.timestampFormat)}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className="shrink-0 font-mono">{item.commit.oid.slice(0, 7)}</span>
+            </p>
           </div>
         );
       }

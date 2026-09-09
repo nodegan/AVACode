@@ -28,6 +28,8 @@ export interface ProviderTaskSnapshot {
   readonly externalListName: string | null;
   readonly externalFolderId: string | null;
   readonly externalFolderName: string | null;
+  /** The provider's id for this task's parent, when it is a secondary task. */
+  readonly externalParentTaskId: string | null;
   readonly assignees: ReadonlyArray<string>;
   readonly externalCreatedAt: string | null;
   readonly externalUpdatedAt: string | null;

@@ -172,6 +172,17 @@ export const Task = Schema.Struct({
   listName: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /**
+   * The local task this task hangs under, when its provider links it to a
+   * parent (ClickUp subtasks; Linear sub-issues later). Resolved from the
+   * provider's external parent id at read time, so it is null until the
+   * parent's own row is synced.
+   */
+  parentTaskId: Schema.NullOr(TaskId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** The parent task's title, resolved alongside parentTaskId for display. */
+  parentTaskTitle: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   externalTaskId: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -297,6 +308,8 @@ export const TaskQueryFilter = Schema.Struct({
   statuses: Schema.optional(Schema.Array(TaskStatusCategory)),
   assignees: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   linkedThreadId: Schema.optional(ThreadId),
+  /** Tasks hanging under this task: its secondary tasks at the provider. */
+  parentTaskId: Schema.optional(TaskId),
   /** Tasks carrying this branch name in their linked-branch set. */
   linkedBranchName: Schema.optional(TrimmedNonEmptyString),
   /** Free-text search over title and provider ids (ClickUp custom id, external id). */

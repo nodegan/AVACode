@@ -15,6 +15,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     linkedThreadId: null,
     listId: null,
     listName: null,
+    parentTaskId: null,
+    parentTaskTitle: null,
     externalTaskId: "abc123",
     externalCustomId: null,
     externalUrl: null,
@@ -109,5 +111,31 @@ describe("formatTaskContext", () => {
     expect(withNotes).toContain("### Notes");
     expect(withNotes).toContain("- (2026-09-02): Repro is on staging.");
     expect(withNotes.match(/^- \(/gm)?.length).toBe(2);
+  });
+
+  it("names the parent task in the meta block", () => {
+    const markdown = formatTaskContext(makeTask({ parentTaskTitle: "Release 1.0" }));
+    expect(markdown).toContain("Parent task: Release 1.0");
+  });
+
+  it("renders subtasks with their statuses and caps the list", () => {
+    const markdown = formatTaskContext(makeTask(), {
+      subtasks: [
+        makeTask({ id: TaskId.make("task-2"), title: "Repro on staging", statusCategory: "done" }),
+        makeTask({ id: TaskId.make("task-3"), title: "Patch the redirect" }),
+      ],
+    });
+    expect(markdown).toContain(
+      ["### Subtasks", "- [Done] Repro on staging", "- [In progress] Patch the redirect"].join(
+        "\n",
+      ),
+    );
+
+    const many = Array.from({ length: 25 }, (_, index) =>
+      makeTask({ id: TaskId.make(`task-${index}`), title: `Subtask ${index}` }),
+    );
+    const capped = formatTaskContext(makeTask(), { subtasks: many });
+    expect(capped).toContain("Subtask 24");
+    expect(capped).not.toContain("Subtask 4\n");
   });
 });

@@ -161,6 +161,10 @@ A task created locally (`provider: "manual"`), optionally assigned to a manual l
 
 A user-managed status in the registry backed by the `task_statuses` table, edited from the Tasks settings section (add, edit, delete). Manual tasks attach to a status by id and copy its label, category, and color for display, so status edits cascade to those copies. Deleting a status that still has tasks requires a surviving status to reassign them to; the caller picks it. Synced tasks keep their provider's own status fields. See [TaskService.ts][27].
 
+#### Secondary task
+
+A task that hangs under another task at its provider — ClickUp subtasks, later Linear sub-issues. The sync stores the provider's external parent id on the child's row (`tasks.external_parent_task_id`) and resolves the local parent at read time, so out-of-order syncs heal themselves and a child whose parent is outside the sync scope just renders as a plain task until the parent arrives. Surfaced in the task detail view (parent field, subtask list) and in the linked-task turn context the model receives.
+
 ## Practical Shortcuts
 
 - If you see `requested`, think "intent recorded".

@@ -109,8 +109,10 @@ export const GitGraphCommit = Schema.Struct({
   parents: Schema.Array(TrimmedNonEmptyStringSchema),
   refs: Schema.Array(GitGraphRef),
   authorName: Schema.String,
+  authorEmail: Schema.optional(Schema.String),
   timestamp: NonNegativeInt,
   subject: Schema.String,
+  body: Schema.optional(Schema.String),
 });
 export type GitGraphCommit = typeof GitGraphCommit.Type;
 

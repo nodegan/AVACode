@@ -1680,6 +1680,35 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("captures the author email and full message body", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* writeTextFile(cwd, "body.txt", "body\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, [
+          "commit",
+          "-m",
+          "feat(graph): detailed commits",
+          "-m",
+          "First paragraph.\n\nSigned-off-by: Test <test@test.com>",
+        ]);
+
+        const graph = yield* driver.gitGraphLog({ cwd });
+
+        assert.equal(graph.commits[0]?.subject, "feat(graph): detailed commits");
+        assert.equal(
+          graph.commits[0]?.body,
+          "First paragraph.\n\nSigned-off-by: Test <test@test.com>",
+        );
+        assert.equal(graph.commits[0]?.authorEmail, "test@test.com");
+        // Commits without a message body omit the field.
+        assert.equal(graph.commits[1]?.subject, "initial commit");
+        assert.equal(graph.commits[1]?.body, undefined);
+      }),
+    );
+
     it.effect("paginates with nextCursor and skips", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

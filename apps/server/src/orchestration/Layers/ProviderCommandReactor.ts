@@ -759,28 +759,48 @@ const make = Effect.gen(function* () {
         ),
       );
     if (tasks.length === 0) return null;
-    // Comments load in parallel so several provider tasks cost one timeout,
-    // not one per task.
-    const commentsPerTask = yield* Effect.all(
+    // Comments and subtasks load in parallel so several provider tasks cost
+    // one timeout, not one per task. Subtasks are local store reads (synced
+    // copies of the provider's hierarchy); comments relay to the provider.
+    const contextPerTask = yield* Effect.all(
       tasks.map((task) =>
-        task.externalTaskId === null
-          ? Effect.succeed([] as ReadonlyArray<TaskComment>)
-          : taskService.getTaskComments(task.id).pipe(
-              Effect.map((result) => result.comments),
-              Effect.timeout(LINKED_TASK_COMMENTS_TIMEOUT),
+        Effect.all({
+          comments:
+            task.externalTaskId === null
+              ? Effect.succeed([] as ReadonlyArray<TaskComment>)
+              : taskService.getTaskComments(task.id).pipe(
+                  Effect.map((result) => result.comments),
+                  Effect.timeout(LINKED_TASK_COMMENTS_TIMEOUT),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("provider command reactor timed out loading task comments", {
+                      threadId,
+                      taskId: task.id,
+                      cause: Cause.pretty(cause),
+                    }).pipe(Effect.as([])),
+                  ),
+                ),
+          subtasks: taskService
+            .queryTasks({ filter: { parentTaskId: task.id, page: 1, pageSize: 20 } })
+            .pipe(
+              Effect.map((result) => result.tasks),
               Effect.catchCause((cause) =>
-                Effect.logWarning("provider command reactor timed out loading task comments", {
+                Effect.logWarning("provider command reactor failed to load task subtasks", {
                   threadId,
                   taskId: task.id,
                   cause: Cause.pretty(cause),
                 }).pipe(Effect.as([])),
               ),
             ),
+        }),
       ),
       { discard: false },
     );
     return buildLinkedTaskContextBlock(
-      tasks.map((task, index) => ({ task, comments: commentsPerTask[index] ?? [] })),
+      tasks.map((task, index) => ({
+        task,
+        comments: contextPerTask[index]?.comments ?? [],
+        subtasks: contextPerTask[index]?.subtasks ?? [],
+      })),
     );
   });
 

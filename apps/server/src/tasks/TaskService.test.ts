@@ -15,7 +15,11 @@ import {
 import * as ServerSecretStoreModule from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
-import { mapClickUpAttachments, mapClickUpComments } from "./providers/clickup.ts";
+import {
+  mapClickUpAttachments,
+  mapClickUpComments,
+  clickUpParentTaskId,
+} from "./providers/clickup.ts";
 import { TaskService } from "./TaskService.ts";
 import { TaskServiceLive } from "./TaskService.ts";
 
@@ -49,6 +53,17 @@ const clickUpPages = [
         list: { id: "901501926053", name: "Sprint Backlog" },
         folder: { id: "folder-mobile-squad", name: "Mobile Squad", hidden: false },
         space: { id: "7002367" },
+      },
+      {
+        // A secondary task: its parent link points at the task above.
+        id: "sub-1",
+        name: "Repro on staging",
+        parent: "9hz",
+        date_created: "1567700000001",
+        date_updated: "1567780450203",
+        status: { status: "to do", type: "open" },
+        list: { id: "901501926053", name: "Sprint Backlog" },
+        folder: { id: "folder-mobile-squad", name: "Mobile Squad", hidden: false },
       },
     ],
     last_page: true,
@@ -209,6 +224,8 @@ interface SeedTask {
   readonly statusCategory?: string;
   readonly assignees?: ReadonlyArray<string>;
   readonly customId?: string;
+  /** Seeds this task as a secondary task of the task seeded at this index. */
+  readonly parentIndex?: number;
 }
 
 const assigneesJson = (assignees: ReadonlyArray<string>): string => JSON.stringify(assignees);
@@ -243,6 +260,7 @@ const seedTasks = Effect.fn("seedTasks")(function* (tasks: ReadonlyArray<SeedTas
       }
     }
     const taskId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${String(index).padStart(12, "0")}`);
+    const parentTaskId = task.parentIndex === undefined ? null : String(900000 + task.parentIndex);
     yield* sql`
       INSERT INTO tasks (
         task_id,
@@ -255,6 +273,7 @@ const seedTasks = Effect.fn("seedTasks")(function* (tasks: ReadonlyArray<SeedTas
         list_id,
         external_task_id,
         external_custom_id,
+        external_parent_task_id,
         external_url,
         assignees_json,
         synced_at,
@@ -273,6 +292,7 @@ const seedTasks = Effect.fn("seedTasks")(function* (tasks: ReadonlyArray<SeedTas
         ${listId},
         ${listId === null ? null : String(900000 + index)},
         ${task.customId ?? null},
+        ${listId === null ? null : parentTaskId},
         ${listId === null ? null : `https://app.clickup.com/t/${900000 + index}`},
         ${assigneesJson(task.assignees ?? [])},
         ${null},
@@ -602,6 +622,58 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
         filter: { taskIds: [TaskId.make("does-not-exist")] },
       });
       assert.strictEqual(unknownOnly.total, 0);
+    }).pipe(Effect.provide(TestLayers)),
+  );
+
+  it.effect("synced subtasks resolve their parent and answer the parentTaskId filter", () =>
+    Effect.gen(function* () {
+      yield* seedTasks([
+        { title: "Fix login bug", listId: "list-a", listName: "Alpha" },
+        {
+          title: "Repro on staging",
+          listId: "list-a",
+          listName: "Alpha",
+          parentIndex: 0,
+        },
+        {
+          title: "Patch the redirect",
+          listId: "list-a",
+          listName: "Alpha",
+          parentIndex: 0,
+        },
+        // A child whose parent is not in the store resolves to nothing.
+        { title: "Orphan subtask", listId: "list-a", listName: "Alpha", parentIndex: 99 },
+        { title: "Unrelated", listId: "list-a", listName: "Alpha" },
+      ]);
+
+      const service = yield* TaskService;
+      const parentId = TaskId.make(`aaaaaaaa-aaaa-4aaa-8aaa-${"0".repeat(12)}`);
+
+      const children = yield* service.queryTasks({
+        filter: { parentTaskId: parentId, pageSize: 50 },
+      });
+      assert.strictEqual(children.total, 2);
+      assert.deepStrictEqual(children.tasks.map((task) => task.title).sort(), [
+        "Patch the redirect",
+        "Repro on staging",
+      ]);
+      // Every child carries its parent's local id and title for display.
+      assert.ok(children.tasks.every((task) => task.parentTaskId === parentId));
+      assert.ok(children.tasks.every((task) => task.parentTaskTitle === "Fix login bug"));
+
+      // A task whose provider parent never synced reads as top-level.
+      const orphans = yield* service.queryTasks({ filter: { query: "Orphan subtask" } });
+      const orphan = orphans.tasks[0];
+      assert.ok(orphan);
+      assert.strictEqual(orphan.parentTaskId, null);
+      assert.strictEqual(orphan.parentTaskTitle, null);
+
+      // The parent task itself reads as top-level: no self-parenting through
+      // the shared external-id space.
+      const parentRows = yield* service.queryTasks({
+        filter: { taskIds: [parentId] },
+      });
+      assert.strictEqual(parentRows.tasks[0]?.parentTaskId, null);
     }).pipe(Effect.provide(TestLayers)),
   );
 
@@ -1179,7 +1251,7 @@ it.live("syncProviderTasks auto-bootstraps the config and syncs in the backgroun
     const byFolder = yield* service.queryTasks({
       filter: { folderIds: [`${CLICKUP}:folder-mobile-squad`], pageSize: 200 },
     });
-    assert.strictEqual(byFolder.total, 101);
+    assert.strictEqual(byFolder.total, 102);
     assert.ok(byFolder.tasks.some((task) => task.title === "Fix login bug"));
     assert.ok(byFolder.tasks.some((task) => task.assignees.includes("Ana")));
 
@@ -1187,7 +1259,32 @@ it.live("syncProviderTasks auto-bootstraps the config and syncs in the backgroun
     const loginBug = byFolder.tasks.find((task) => task.title === "Fix login bug");
     assert.ok(loginBug);
     assert.strictEqual(loginBug.createdAt, DateTime.formatIso(DateTime.makeUnsafe(1567700000000)));
+
+    // The subtask's provider parent link resolves to the synced parent row.
+    const repro = byFolder.tasks.find((task) => task.title === "Repro on staging");
+    assert.ok(repro);
+    assert.strictEqual(repro.parentTaskId, loginBug.id);
+    assert.strictEqual(repro.parentTaskTitle, "Fix login bug");
+
+    const subtaskQuery = yield* service.queryTasks({
+      filter: { parentTaskId: loginBug.id, pageSize: 50 },
+    });
+    assert.deepStrictEqual(
+      subtaskQuery.tasks.map((task) => task.title),
+      ["Repro on staging"],
+    );
   }).pipe(Effect.provide(Layer.provideMerge(SyncTestLayers, NodeServices.layer))),
+);
+
+it.effect("clickUpParentTaskId normalizes the parent reference", () =>
+  Effect.sync(() => {
+    assert.strictEqual(clickUpParentTaskId({ parent: "9hz" }), "9hz");
+    assert.strictEqual(clickUpParentTaskId({ parent: 12345 }), "12345");
+    assert.strictEqual(clickUpParentTaskId({ parent: null }), null);
+    assert.strictEqual(clickUpParentTaskId({ parent: "  " }), null);
+    // ClickUp uses "0" for "no parent" in some legacy payloads.
+    assert.strictEqual(clickUpParentTaskId({ parent: "0" }), null);
+  }),
 );
 
 it.effect("mapClickUpAttachments normalizes the ClickUp attachment payload", () =>

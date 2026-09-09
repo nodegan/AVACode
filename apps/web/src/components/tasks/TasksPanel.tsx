@@ -192,8 +192,16 @@ function TaskCard(props: TaskCardProps) {
           <TaskStatusBadge task={task} />
         )}
         {task.provider === "manual" ? (
-          <span className="rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground">
+          <span className="shrink-0 whitespace-nowrap rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground">
             Manual
+          </span>
+        ) : null}
+        {task.parentTaskId !== null ? (
+          <span
+            className="shrink-0 whitespace-nowrap rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground"
+            title={task.parentTaskTitle ?? undefined}
+          >
+            Subtask
           </span>
         ) : null}
         {props.isCurrentThread ? (
@@ -1490,6 +1498,7 @@ export function TasksPanel(props: {
                       : undefined
                   }
                   statusChangeBusy={busyKey === `task-update:${detailTask.id}`}
+                  onOpenTask={openTaskDetail}
                 />
               </>
             ) : detailLoading ? (

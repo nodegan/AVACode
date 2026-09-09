@@ -25,6 +25,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     linkedBranches: [],
     listId: null,
     listName: null,
+    parentTaskId: null,
+    parentTaskTitle: null,
     externalTaskId: null,
     externalCustomId: null,
     externalUrl: null,
@@ -110,10 +112,12 @@ describe("TaskTurnContext", () => {
   });
 
   it("appends threaded ClickUp comments when provided", () => {
-    const markdown = formatTaskAsTurnContext(makeTask(), [
-      makeComment({ id: "c-1", body: "Root comment" }),
-      makeComment({ id: "c-2", parentId: "c-1", body: "A reply", authorName: "Bo" }),
-    ]);
+    const markdown = formatTaskAsTurnContext(makeTask(), {
+      comments: [
+        makeComment({ id: "c-1", body: "Root comment" }),
+        makeComment({ id: "c-2", parentId: "c-1", body: "A reply", authorName: "Bo" }),
+      ],
+    });
     expect(markdown).toContain(
       [
         "### Provider comments",
@@ -121,6 +125,15 @@ describe("TaskTurnContext", () => {
         "  - **Bo** (2026-09-01): A reply",
       ].join("\n"),
     );
+  });
+
+  it("renders the parent task and subtasks handed in as extras", () => {
+    const markdown = formatTaskAsTurnContext(
+      makeTask({ parentTaskId: TaskId.make("task-9"), parentTaskTitle: "Fix login bug" }),
+      { subtasks: [makeTask({ id: TaskId.make("task-2"), title: "Repro on staging" })] },
+    );
+    expect(markdown).toContain("Parent task: Fix login bug");
+    expect(markdown).toContain("### Subtasks\n- [In Progress] Repro on staging");
   });
 
   it("appends notes and omits the comments section without them", () => {

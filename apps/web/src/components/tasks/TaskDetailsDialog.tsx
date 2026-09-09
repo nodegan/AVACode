@@ -3,6 +3,7 @@ import type {
   Task,
   TaskAttachment,
   TaskComment,
+  TaskId,
   TaskStatus,
   TaskStatusCategory,
   ThreadId,
@@ -15,6 +16,7 @@ import {
   ChevronRightIcon,
   CloudIcon,
   CopyIcon,
+  CornerDownRightIcon,
   EllipsisIcon,
   ExternalLinkIcon,
   HashIcon,
@@ -75,7 +77,12 @@ import { cn } from "~/lib/utils";
 
 import { ExpandedImageDialog } from "../chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
-import { fetchTaskAttachments, fetchTaskComments, setTaskLinkedBranches } from "./taskApi";
+import {
+  fetchTaskAttachments,
+  fetchTaskComments,
+  fetchTasksQuery,
+  setTaskLinkedBranches,
+} from "./taskApi";
 export function statusTone(status: TaskStatusCategory): string {
   switch (status) {
     case "done":
@@ -157,7 +164,7 @@ export function TaskStatusBadge({ task }: { task: Task }) {
   if (statusColor) {
     return (
       <span
-        className="rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase"
+        className="shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase"
         style={{
           borderColor: `color-mix(in srgb, ${statusColor} 35%, transparent)`,
           backgroundColor: `color-mix(in srgb, ${statusColor} 12%, transparent)`,
@@ -171,7 +178,7 @@ export function TaskStatusBadge({ task }: { task: Task }) {
   return (
     <span
       className={cn(
-        "rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase",
+        "shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase",
         statusTone(task.statusCategory),
       )}
     >
@@ -431,6 +438,122 @@ function TaskAttachmentsSection(props: TaskDetailsBodyProps) {
   );
 }
 
+type SubtasksState =
+  | { readonly status: "loading" }
+  | { readonly status: "error" }
+  | { readonly status: "ready"; readonly subtasks: ReadonlyArray<Task> };
+
+/** One secondary task row: status, title, and an affordance to open it. */
+function TaskSubtaskRow(props: { subtask: Task; onOpen?: ((taskId: TaskId) => void) | undefined }) {
+  const { subtask } = props;
+  const className =
+    "flex w-full min-w-0 items-center gap-2 rounded-lg border border-border/70 px-2 py-1.5";
+  const content = (
+    <>
+      <TaskStatusBadge task={subtask} />
+      <span className="min-w-0 truncate text-sm">{subtask.title}</span>
+      {subtask.externalUrl ? (
+        <ExternalLinkIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
+      ) : null}
+    </>
+  );
+  if (props.onOpen) {
+    return (
+      <button
+        type="button"
+        onClick={() => props.onOpen?.(subtask.id)}
+        className={cn(className, "cursor-pointer text-left hover:bg-accent/40")}
+      >
+        {content}
+      </button>
+    );
+  }
+  // Without a navigator (dialog contexts), an external task still opens at
+  // its provider; fully local rows stay static.
+  if (subtask.externalUrl) {
+    return (
+      <a
+        href={subtask.externalUrl}
+        target="_blank"
+        rel="noreferrer"
+        className={cn(className, "hover:bg-accent/40")}
+      >
+        {content}
+      </a>
+    );
+  }
+  return <div className={className}>{content}</div>;
+}
+
+/**
+ * The task's secondary tasks at its provider (ClickUp subtasks; any future
+ * provider that links tasks to parents), resolved from the local store.
+ * Expanded by default with the count in the header; collapsing tucks the
+ * rows away behind it.
+ */
+function TaskSubtasksSection(props: TaskDetailsBodyProps) {
+  const { task } = props;
+  const prepared = usePreparedConnection(props.environmentId ?? null);
+  const [state, setState] = useState<SubtasksState>({ status: "loading" });
+  const [expanded, setExpanded] = useState(true);
+
+  useEffect(() => {
+    if (prepared._tag === "None") return;
+    let cancelled = false;
+    setState({ status: "loading" });
+    fetchTasksQuery(prepared.value, { parentTaskId: task.id, page: 1, pageSize: 50 })
+      .then((result) => {
+        if (!cancelled) setState({ status: "ready", subtasks: result.tasks });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [prepared, task.id]);
+
+  if (prepared._tag === "None") return null;
+  if (state.status === "ready" && state.subtasks.length === 0) return null;
+
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full cursor-pointer items-center gap-1 rounded-md py-0.5 text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        <ChevronRightIcon
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-90",
+          )}
+        />
+        <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          Subtasks
+        </span>
+        {state.status === "ready" ? (
+          <span className="text-xs text-muted-foreground/70">{state.subtasks.length}</span>
+        ) : null}
+      </button>
+      {state.status === "error" ? (
+        <p className="text-xs text-destructive">Failed to load subtasks.</p>
+      ) : expanded ? (
+        state.status === "loading" ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : (
+          <div className="space-y-1">
+            {state.subtasks.map((subtask) => (
+              <TaskSubtaskRow key={subtask.id} subtask={subtask} onOpen={props.onOpenTask} />
+            ))}
+          </div>
+        )
+      ) : null}
+    </div>
+  );
+}
+
 export interface TaskDetailsBodyProps {
   task: Task;
   /** Environment context lets the detail body fetch ClickUp attachments. */
@@ -445,6 +568,8 @@ export interface TaskDetailsBodyProps {
   onStatusChange?: ((statusId: string) => void) | undefined;
   /** Disables the quick menu while its status change is in flight. */
   statusChangeBusy?: boolean | undefined;
+  /** Opens another task's details (panel view); omit to keep rows non-navigating. */
+  onOpenTask?: ((taskId: TaskId) => void) | undefined;
 }
 
 interface ProviderCommentThread {
@@ -899,7 +1024,7 @@ function TaskDetailField(props: {
   icon: ReactNode;
   label: string;
   value: ReactNode;
-  title?: string;
+  title?: string | undefined;
 }) {
   return (
     <div className="flex min-w-0 items-center gap-2" title={props.title}>
@@ -923,6 +1048,9 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
   // The provider's human-facing id; manual tasks have none, and their
   // internal record id stays hidden.
   const displayTaskId = task.externalCustomId ?? task.externalTaskId;
+  // Const extraction keeps the narrowed TaskId usable inside the row's click
+  // handler below.
+  const parentTaskId = task.parentTaskId;
 
   return (
     <>
@@ -979,6 +1107,26 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
         {task.listName ? (
           <TaskDetailField icon={<ListIcon />} label="List" value={task.listName} />
         ) : null}
+        {parentTaskId ? (
+          <TaskDetailField
+            icon={<CornerDownRightIcon />}
+            label="Parent task"
+            title={task.parentTaskTitle ?? undefined}
+            value={
+              props.onOpenTask ? (
+                <button
+                  type="button"
+                  onClick={() => props.onOpenTask?.(parentTaskId)}
+                  className="max-w-full cursor-pointer truncate text-left text-sm leading-tight hover:underline"
+                >
+                  {task.parentTaskTitle ?? parentTaskId}
+                </button>
+              ) : (
+                (task.parentTaskTitle ?? parentTaskId)
+              )
+            }
+          />
+        ) : null}
         {task.assignees.length > 0 ? (
           <TaskDetailField
             icon={<UserIcon />}
@@ -1025,6 +1173,12 @@ export function TaskDetailsBody(props: TaskDetailsBodyProps) {
           </div>
         ) : null}
       </div>
+      <TaskSubtasksSection
+        key={task.id}
+        task={task}
+        environmentId={props.environmentId}
+        onOpenTask={props.onOpenTask}
+      />
       <TaskAttachmentsSection task={task} environmentId={props.environmentId} />
       <TaskCommentsSection task={task} environmentId={props.environmentId} />
       <div className="space-y-2">
@@ -1160,7 +1314,7 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
   const showOverflow = showUnlink || showDelete || showEdit || showOpenExternal;
 
   return (
-    <div className="flex items-center gap-0.5">
+    <div className="flex items-center gap-1">
       {showCreateThread ? (
         <Button size="sm" onClick={props.onCreateThread}>
           <ListTodoIcon className="size-3.5" />
@@ -1180,7 +1334,7 @@ export function TaskDetailsActions(props: TaskDetailsActionsProps) {
       ) : null}
       {showOverflow ? (
         <>
-          <div role="presentation" className="mx-1 h-4 w-px bg-border" />
+          <div role="presentation" className="mx-0.5 h-4 w-px bg-border" />
           <Menu>
             <MenuTrigger
               render={<Button size="icon-sm" variant="ghost" aria-label="More actions" />}
