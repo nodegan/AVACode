@@ -605,18 +605,25 @@ it.layer(NodeServices.layer)("TaskService", (it) => {
     }).pipe(Effect.provide(TestLayers)),
   );
 
-  it.effect("manual tasks can join any list and unknown lists are rejected", () =>
+  it.effect("manual tasks can only join manual lists and unknown lists are rejected", () =>
     Effect.gen(function* () {
       yield* seedTasks([{ title: "Synced", listId: "list-a", listName: "Alpha" }]);
 
       const service = yield* TaskService;
+      const list = yield* service.createList({ name: "Personal" });
       const created = yield* service.createManualTask({
         title: "Local follow-up",
-        listId: "clickup:list-a",
+        listId: list.id,
       });
       assert.strictEqual(created.provider, "manual");
-      assert.strictEqual(created.listId, "clickup:list-a");
-      assert.strictEqual(created.listName, "Alpha");
+      assert.strictEqual(created.listId, list.id);
+      assert.strictEqual(created.listName, "Personal");
+
+      // A synced list is the provider's copy; manual tasks cannot land in it.
+      const synced = yield* Effect.result(
+        service.createManualTask({ title: "Misplaced", listId: "clickup:list-a" }),
+      );
+      assert.strictEqual(synced._tag, "Failure");
 
       const unknown = yield* Effect.result(
         service.createManualTask({ title: "Lost", listId: "clickup:missing" }),

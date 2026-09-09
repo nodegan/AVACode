@@ -803,6 +803,11 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /**
+   * Resolves the target list for a manual task. Synced lists are rejected:
+   * their rows belong to the provider's sync, and a connection folder only
+   * ever holds such lists (for ClickUp today, any provider later).
+   */
   const requireListAdapter = (listId: string) =>
     Effect.gen(function* () {
       const rows = yield* sql<TaskListRow>`
@@ -818,6 +823,12 @@ const make = Effect.gen(function* () {
       const row = rows[0];
       if (!row) {
         return yield* taskServiceError("tasks.createManualTask", `Unknown task list: ${listId}`);
+      }
+      if (row.provider !== MANUAL_TASK_PROVIDER) {
+        return yield* taskServiceError(
+          "tasks.createManualTask",
+          "Manual tasks can only be created in manual lists; synced lists are managed by their provider.",
+        );
       }
       return row;
     });

@@ -155,7 +155,7 @@ A first-class grouping of tasks, optionally inside a folder. Both synced (provid
 
 #### Manual task
 
-A task created locally (`provider: "manual"`), optionally assigned to any list. Manual tasks can be edited and deleted freely; synced copies are refreshed by their provider's sync.
+A task created locally (`provider: "manual"`), optionally assigned to a manual list. Synced lists — the ones a provider connection's sync fills, under its connection folders — refuse manual tasks, for ClickUp today and any future provider. Manual tasks can be edited and deleted freely; synced copies are refreshed by their provider's sync.
 
 #### Task status
 

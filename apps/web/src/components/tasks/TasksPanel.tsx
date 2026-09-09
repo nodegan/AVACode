@@ -1005,24 +1005,18 @@ export function TasksPanel(props: {
     [facets?.folders],
   );
 
-  // Task-create target groups: every list, labeled by its folder path so a
-  // ClickUp list and a manual list with the same name stay distinguishable.
+  // Task-create target groups: manual lists only, since a synced list takes
+  // its tasks from its provider; labeled by folder path so two lists with
+  // the same name stay distinguishable.
   const taskOptionGroups = useMemo<TaskListOptionGroup[]>(() => {
-    const lists = facets?.lists ?? [];
+    const lists = (facets?.lists ?? []).filter((list) => list.provider === "manual");
     const folderLabel = (list: TaskListFacet): string => {
       if (!list.folderId) return "No folder";
-      const provider =
-        (facets?.folders ?? []).find((folder) => folder.id === list.folderId)?.provider ??
-        list.provider;
-      const folderName =
+      return (
         (facets?.folders ?? []).find((folder) => folder.id === list.folderId)?.name ??
         list.folderName ??
-        "";
-      if (provider === "manual" || list.provider === "manual") return folderName;
-      const label =
-        (panel?.providers ?? []).find((candidate) => candidate.providerId === provider)?.label ??
-        provider;
-      return `${label} / ${folderName}`;
+        ""
+      );
     };
     const groups = new Map<string, { id: string; label: string; lists: TaskListFacet[] }>();
     for (const list of lists) {
@@ -1035,7 +1029,7 @@ export function TasksPanel(props: {
       }
     }
     return [...groups.values()];
-  }, [facets?.folders, facets?.lists, panel?.providers]);
+  }, [facets?.folders, facets?.lists]);
 
   // A folder counts as browsable content even when empty, so a freshly
   // created folder renders immediately instead of the empty state.
@@ -1048,6 +1042,9 @@ export function TasksPanel(props: {
     listSelection.kind === "list"
       ? ((facets?.lists ?? []).find((list) => list.id === listSelection.listId) ?? null)
       : null;
+  // Manual tasks can only land in manual lists; a synced list (any provider
+  // connection's folder tree) is the provider's copy and refuses them.
+  const activeListIsManual = activeList === null || activeList.provider === "manual";
 
   const openAllTasks = useCallback(() => {
     setListSelection({ kind: "all" });
@@ -1120,15 +1117,17 @@ export function TasksPanel(props: {
     const title = newTaskTitle.trim();
     if (!title) return;
     void runMutation("task-create", async (connection) => {
-      // A manual task lands in the list currently browsed, whatever syncs it;
+      // A manual task lands in the list currently browsed when it is manual;
       // from "All tasks" it stays unassigned.
       await createManualTask(connection, {
         title,
-        ...(listSelection.kind === "list" ? { listId: listSelection.listId } : {}),
+        ...(listSelection.kind === "list" && activeListIsManual
+          ? { listId: listSelection.listId }
+          : {}),
       });
       setNewTaskTitle("");
     });
-  }, [listSelection, newTaskTitle, runMutation]);
+  }, [activeListIsManual, listSelection, newTaskTitle, runMutation]);
 
   const submitCreateTask = useCallback(
     (input: { title: string; description?: string; listId?: string }) =>
@@ -1393,7 +1392,9 @@ export function TasksPanel(props: {
         open={createTaskOpen}
         onOpenChange={setCreateTaskOpen}
         groups={taskOptionGroups}
-        defaultListId={listSelection.kind === "list" ? listSelection.listId : null}
+        defaultListId={
+          listSelection.kind === "list" && activeListIsManual ? listSelection.listId : null
+        }
         statuses={taskStatuses}
         busy={busyKey === "task-create"}
         onSubmit={submitCreateTask}
@@ -1613,42 +1614,46 @@ export function TasksPanel(props: {
 
           {tasksError ? <p className="text-xs text-destructive">{tasksError}</p> : null}
 
-          <section className="flex items-center gap-2">
-            <Input
-              value={newTaskTitle}
-              onChange={(event) => setNewTaskTitle(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") createTask();
-              }}
-              placeholder={
-                listSelection.kind === "list"
-                  ? `Add a task to ${activeList?.name ?? "this list"}…`
-                  : "Add a task…"
-              }
-              aria-label="New task title"
-            />
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => setCreateTaskOpen(true)}
-              aria-label="New task with details"
-              title="New task with details"
-            >
-              <ListPlusIcon />
-            </Button>
-            <Button
-              size="sm"
-              onClick={createTask}
-              disabled={busyKey === "task-create" || newTaskTitle.trim().length === 0}
-            >
-              {busyKey === "task-create" ? (
-                <Loader2Icon className="size-3.5 animate-spin" />
-              ) : (
-                <PlusIcon className="size-3.5" />
-              )}
-              Add
-            </Button>
-          </section>
+          {/* Quick-add lives on manual targets only; a synced list takes its
+              tasks from its provider, so no creation affordances there. */}
+          {!(listSelection.kind === "list" && !activeListIsManual) ? (
+            <section className="flex items-center gap-2">
+              <Input
+                value={newTaskTitle}
+                onChange={(event) => setNewTaskTitle(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") createTask();
+                }}
+                placeholder={
+                  listSelection.kind === "list"
+                    ? `Add a task to ${activeList?.name ?? "this list"}…`
+                    : "Add a task…"
+                }
+                aria-label="New task title"
+              />
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => setCreateTaskOpen(true)}
+                aria-label="New task with details"
+                title="New task with details"
+              >
+                <ListPlusIcon />
+              </Button>
+              <Button
+                size="sm"
+                onClick={createTask}
+                disabled={busyKey === "task-create" || newTaskTitle.trim().length === 0}
+              >
+                {busyKey === "task-create" ? (
+                  <Loader2Icon className="size-3.5 animate-spin" />
+                ) : (
+                  <PlusIcon className="size-3.5" />
+                )}
+                Add
+              </Button>
+            </section>
+          ) : null}
 
           {!tasksLoading && totalTasks === 0 ? (
             <div className="rounded-xl border border-dashed border-border/80 bg-card/60 p-6 text-center text-sm text-muted-foreground">
