@@ -62,6 +62,7 @@ import {
   TaskStatusBadgeMenu,
 } from "./TaskDetailsDialog";
 import { notifyTasksChanged, requestTaskPanelView, useTaskPanelViewRequest } from "./taskLinkStore";
+import { selectTasksPanelLocation, useTasksPanelStore } from "./tasksPanelStore";
 import {
   CreateFolderDialog,
   CreateListDialog,
@@ -114,8 +115,6 @@ const TASK_SEARCH_DEBOUNCE_MS = 150;
 const VIEW_POLL_INTERVAL_MS = 10_000;
 // Opening the panel on data older than this quietly starts a background sync.
 const PROVIDER_AUTO_SYNC_MAX_AGE_MS = 5 * 60_000;
-
-type ListSelection = { readonly kind: "all" } | { readonly kind: "list"; listId: string };
 
 interface TaskTreeFolder {
   id: string;
@@ -392,7 +391,6 @@ export function TasksPanel(props: {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [detailTask, setDetailTask] = useState<Task | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -400,15 +398,12 @@ export function TasksPanel(props: {
   const [tasksResult, setTasksResult] = useState<TaskQueryResult | null>(null);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState<string | null>(null);
-  const [listSelection, setListSelection] = useState<ListSelection>({ kind: "all" });
-  const [view, setView] = useState<"browse" | "tasks" | "detail">("browse");
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
   const [listSearch, setListSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatusCategory | "all">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
   const [taskSearchInput, setTaskSearchInput] = useState("");
   const [taskSearchQuery, setTaskSearchQuery] = useState("");
-  const [page, setPage] = useState(1);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [createTaskOpen, setCreateTaskOpen] = useState(false);
   const [editTaskOpen, setEditTaskOpen] = useState(false);
@@ -418,8 +413,16 @@ export function TasksPanel(props: {
   // List ids a pending folder delete takes with it, so the current selection
   // can be dropped if it points into the deleted subtree.
   const deleteTargetListIdsRef = useRef<ReadonlyArray<string>>([]);
-  // Where the detail view was opened from, so deleting a task lands back there.
-  const viewBeforeDetailRef = useRef<"browse" | "tasks">("tasks");
+
+  // The panel's place in its own navigation lives in a store keyed by project:
+  // switching right-panel tabs unmounts this component, and the store is what
+  // brings the view back where it was left instead of restarting at "browse".
+  const projectKey = `${props.environmentId}:${props.projectId}`;
+  const tasksPanelLocation = useTasksPanelStore((state) =>
+    selectTasksPanelLocation(state.byProjectKey, projectKey),
+  );
+  const updateTasksPanelLocation = useTasksPanelStore((state) => state.update);
+  const { view, selectedTaskId, viewBeforeDetail, listSelection, page } = tasksPanelLocation;
 
   // Providers with a stored credential are syncable; today that is ClickUp,
   // tomorrow Linear and friends.
@@ -511,10 +514,10 @@ export function TasksPanel(props: {
   useEffect(() => {
     const id = setTimeout(() => {
       setTaskSearchQuery(taskSearchInput);
-      setPage(1);
+      updateTasksPanelLocation(projectKey, { page: 1 });
     }, TASK_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(id);
-  }, [taskSearchInput]);
+  }, [projectKey, taskSearchInput, updateTasksPanelLocation]);
 
   const queryFilter = useMemo<TaskQueryFilter>(() => {
     const query = taskSearchQuery.trim();
@@ -705,13 +708,19 @@ export function TasksPanel(props: {
       // Leave the detail view at once and return to where it was opened
       // from; the refresh below confirms the deletion, and a failure shows
       // up as the panel's error line.
-      setSelectedTaskId((current) => (current === taskId ? null : current));
-      setView((current) => (current === "detail" ? viewBeforeDetailRef.current : current));
+      const location = selectTasksPanelLocation(
+        useTasksPanelStore.getState().byProjectKey,
+        projectKey,
+      );
+      updateTasksPanelLocation(projectKey, {
+        selectedTaskId: location.selectedTaskId === taskId ? null : location.selectedTaskId,
+        view: location.view === "detail" ? location.viewBeforeDetail : location.view,
+      });
       void runMutation(`task-delete:${taskId}`, async (connection) => {
         await deleteTaskRequest(connection, taskId);
       });
     },
-    [runMutation],
+    [projectKey, runMutation, updateTasksPanelLocation],
   );
 
   const createLinkedThread = useCallback(
@@ -1055,39 +1064,51 @@ export function TasksPanel(props: {
   const activeListIsManual = activeList === null || activeList.provider === "manual";
 
   const openAllTasks = useCallback(() => {
-    setListSelection({ kind: "all" });
-    setPage(1);
-    setSelectedTaskId(null);
-    setView("tasks");
-  }, []);
+    updateTasksPanelLocation(projectKey, {
+      listSelection: { kind: "all" },
+      page: 1,
+      selectedTaskId: null,
+      view: "tasks",
+    });
+  }, [projectKey, updateTasksPanelLocation]);
 
-  const openTaskList = useCallback((listId: string) => {
-    setListSelection({ kind: "list", listId });
-    setPage(1);
-    setSelectedTaskId(null);
-    setView("tasks");
-  }, []);
+  const openTaskList = useCallback(
+    (listId: string) => {
+      updateTasksPanelLocation(projectKey, {
+        listSelection: { kind: "list", listId },
+        page: 1,
+        selectedTaskId: null,
+        view: "tasks",
+      });
+    },
+    [projectKey, updateTasksPanelLocation],
+  );
 
   const toggleNode = useCallback((nodeId: string) => {
     setExpandedNodes((current) => ({ ...current, [nodeId]: !current[nodeId] }));
   }, []);
 
   const backToBrowse = useCallback(() => {
-    setView("browse");
-  }, []);
+    updateTasksPanelLocation(projectKey, { view: "browse" });
+  }, [projectKey, updateTasksPanelLocation]);
 
   const backFromDetail = useCallback(() => {
-    setSelectedTaskId(null);
-    setView(viewBeforeDetailRef.current);
-  }, []);
+    updateTasksPanelLocation(projectKey, { selectedTaskId: null, view: viewBeforeDetail });
+  }, [projectKey, updateTasksPanelLocation, viewBeforeDetail]);
 
   const openTaskDetail = useCallback(
     (taskId: string) => {
-      if (view !== "detail") viewBeforeDetailRef.current = view;
-      setSelectedTaskId(taskId);
-      setView("detail");
+      const location = selectTasksPanelLocation(
+        useTasksPanelStore.getState().byProjectKey,
+        projectKey,
+      );
+      updateTasksPanelLocation(projectKey, {
+        viewBeforeDetail: location.view === "detail" ? location.viewBeforeDetail : location.view,
+        selectedTaskId: taskId,
+        view: "detail",
+      });
     },
-    [view],
+    [projectKey, updateTasksPanelLocation],
   );
 
   // The header indicator's dialog hands its task over to this panel.
@@ -1111,15 +1132,21 @@ export function TasksPanel(props: {
     };
   }, [detailTask, facets?.lists, openAllTasks, openTaskList]);
 
-  const updateStatusFilter = useCallback((value: TaskStatusCategory | "all") => {
-    setStatusFilter(value);
-    setPage(1);
-  }, []);
+  const updateStatusFilter = useCallback(
+    (value: TaskStatusCategory | "all") => {
+      setStatusFilter(value);
+      updateTasksPanelLocation(projectKey, { page: 1 });
+    },
+    [projectKey, updateTasksPanelLocation],
+  );
 
-  const updateAssigneeFilter = useCallback((value: string) => {
-    setAssigneeFilter(value);
-    setPage(1);
-  }, []);
+  const updateAssigneeFilter = useCallback(
+    (value: string) => {
+      setAssigneeFilter(value);
+      updateTasksPanelLocation(projectKey, { page: 1 });
+    },
+    [projectKey, updateTasksPanelLocation],
+  );
 
   const createTask = useCallback(() => {
     const title = newTaskTitle.trim();
@@ -1196,11 +1223,10 @@ export function TasksPanel(props: {
         listSelection.kind === "list" &&
         deleteTargetListIdsRef.current.includes(listSelection.listId)
       ) {
-        setListSelection({ kind: "all" });
-        setPage(1);
+        updateTasksPanelLocation(projectKey, { listSelection: { kind: "all" }, page: 1 });
       }
     });
-  }, [deleteTarget, listSelection, runMutation]);
+  }, [deleteTarget, listSelection, projectKey, runMutation, updateTasksPanelLocation]);
 
   // A sync shows as running when this client kicked it or when the server
   // reports one (e.g. started from Settings); the panel poll refreshes the flag.
@@ -1687,7 +1713,9 @@ export function TasksPanel(props: {
                 size="sm"
                 variant="ghost"
                 disabled={page <= 1 || tasksLoading}
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                onClick={() =>
+                  updateTasksPanelLocation(projectKey, { page: Math.max(1, page - 1) })
+                }
               >
                 Previous
               </Button>
@@ -1699,7 +1727,7 @@ export function TasksPanel(props: {
                 size="sm"
                 variant="ghost"
                 disabled={page >= totalPages || tasksLoading}
-                onClick={() => setPage((current) => current + 1)}
+                onClick={() => updateTasksPanelLocation(projectKey, { page: page + 1 })}
               >
                 Next
               </Button>
