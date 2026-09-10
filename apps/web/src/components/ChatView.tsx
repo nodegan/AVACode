@@ -6019,96 +6019,137 @@ function ChatViewContent(props: ChatViewProps) {
       {panelToggleControls}
     </div>
   );
+  // Every open surface renders as its own layer and stays mounted across tab
+  // switches: switching only flips visibility, so each panel keeps its whole
+  // state (expanded commits, scroll position, dialogs) exactly where it was
+  // left. Closing a tab unmounts its layer for good.
+  const renderSurfaceLayer = (surface: RightPanelSurface, isActive: boolean) => {
+    const threadRef = activeThreadRef;
+    if (!threadRef) return null;
+    switch (surface.kind) {
+      case "preview":
+        return (
+          <Suspense fallback={null}>
+            <PreviewPanel
+              mode="embedded"
+              threadRef={threadRef}
+              tabId={surface.resourceId}
+              configuredUrls={configuredPreviewUrls}
+              visible={isActive}
+              onSendAnnotation={(annotation, image) => {
+                void onSend(undefined, { annotation, image });
+              }}
+            />
+          </Suspense>
+        );
+      case "terminal":
+        return (
+          <PersistentThreadTerminalPanel
+            threadRef={threadRef}
+            surface={surface}
+            launchContext={activeTerminalLaunchContext ?? null}
+            focusRequestId={isActive ? terminalFocusRequestId : 0}
+            keybindings={keybindings}
+            onAddTerminalContext={addTerminalContextToDraft}
+            onSplitTerminal={splitPanelTerminal}
+            onSplitTerminalVertical={splitPanelTerminalVertical}
+            onNewTerminal={addTerminalSurface}
+            onActiveTerminalChange={activatePanelTerminal}
+            onCloseTerminal={closePanelTerminal}
+            splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
+            splitVerticalShortcutLabel={splitTerminalVerticalShortcutLabel ?? undefined}
+            newShortcutLabel={newTerminalShortcutLabel ?? undefined}
+            closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
+          />
+        );
+      case "diff":
+        return (
+          <Suspense fallback={null}>
+            <DiffPanel
+              key={`${activeThreadKey}:${diffPanelGitStatusResolutionKey}`}
+              mode="embedded"
+              composerDraftTarget={composerDraftTarget}
+              initialGitScope={initialDiffPanelGitScope}
+            />
+          </Suspense>
+        );
+      case "agents":
+        return (
+          <AgentsPanel
+            model={agentPanelModel}
+            environmentId={threadRef?.environmentId ?? null}
+            threadId={threadRef?.threadId ?? null}
+          />
+        );
+      case "tasks":
+        if (!activeProject) return null;
+        return (
+          <TasksPanel
+            environmentId={activeProject.environmentId}
+            projectId={activeProject.id}
+            activeThread={activeThread}
+          />
+        );
+      case "git-graph":
+        if (!graphScope) return null;
+        if (!(isGraphScopedAway || (activeProject && isGitRepo && gitStatusCwd))) return null;
+        return (
+          <Suspense fallback={null}>
+            <GitGraphPanel
+              key={`${graphScope.environmentId}:${graphScope.cwd}`}
+              environmentId={graphScope.environmentId}
+              cwd={graphScope.cwd}
+              onOpenCommitFile={openCommitFileDiff}
+              onCurrentBranchRenamed={handleGraphBranchRenamed}
+              onOpenTask={handleGraphOpenTask}
+              onOpenThread={handleGraphOpenThread}
+            />
+          </Suspense>
+        );
+      case "files":
+      case "file":
+        if (!activeProject || !activeWorkspaceRoot) return null;
+        return (
+          <Suspense fallback={null}>
+            <FilePreviewPanel
+              key={`${activeProject.environmentId}:${activeWorkspaceRoot}`}
+              environmentId={activeProject.environmentId}
+              cwd={activeWorkspaceRoot}
+              projectName={activeProject.title}
+              threadRef={threadRef}
+              composerDraftTarget={composerDraftTarget}
+              keybindings={keybindings}
+              availableEditors={availableEditors}
+              relativePath={surface.kind === "file" ? surface.relativePath : null}
+              revealLine={activeFileSurface?.revealLine ?? null}
+              revealRequestId={activeFileSurface?.revealRequestId ?? 0}
+              onOpenFile={openFileSurface}
+              onPendingChange={handleFilePendingChange}
+            />
+          </Suspense>
+        );
+    }
+  };
   const rightPanelContent = activeThreadRef ? (
-    activeRightPanelSurface?.kind === "preview" ? (
-      <Suspense fallback={null}>
-        <PreviewPanel
-          mode="embedded"
-          threadRef={activeThreadRef}
-          tabId={activeRightPanelSurface.resourceId}
-          configuredUrls={configuredPreviewUrls}
-          visible
-          onSendAnnotation={(annotation, image) => {
-            void onSend(undefined, { annotation, image });
-          }}
-        />
-      </Suspense>
-    ) : activeRightPanelSurface?.kind === "terminal" ? (
-      <PersistentThreadTerminalPanel
-        threadRef={activeThreadRef}
-        surface={activeRightPanelSurface}
-        launchContext={activeTerminalLaunchContext ?? null}
-        focusRequestId={terminalFocusRequestId}
-        keybindings={keybindings}
-        onAddTerminalContext={addTerminalContextToDraft}
-        onSplitTerminal={splitPanelTerminal}
-        onSplitTerminalVertical={splitPanelTerminalVertical}
-        onNewTerminal={addTerminalSurface}
-        onActiveTerminalChange={activatePanelTerminal}
-        onCloseTerminal={closePanelTerminal}
-        splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
-        splitVerticalShortcutLabel={splitTerminalVerticalShortcutLabel ?? undefined}
-        newShortcutLabel={newTerminalShortcutLabel ?? undefined}
-        closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
-      />
-    ) : activeRightPanelSurface?.kind === "diff" ? (
-      <Suspense fallback={null}>
-        <DiffPanel
-          key={`${activeThreadKey}:${diffPanelGitStatusResolutionKey}`}
-          mode="embedded"
-          composerDraftTarget={composerDraftTarget}
-          initialGitScope={initialDiffPanelGitScope}
-        />
-      </Suspense>
-    ) : activeRightPanelSurface?.kind === "agents" ? (
-      <AgentsPanel
-        model={agentPanelModel}
-        environmentId={activeThreadRef?.environmentId ?? null}
-        threadId={activeThreadRef?.threadId ?? null}
-      />
-    ) : activeRightPanelSurface?.kind === "tasks" && activeProject ? (
-      <TasksPanel
-        environmentId={activeProject.environmentId}
-        projectId={activeProject.id}
-        activeThread={activeThread}
-      />
-    ) : activeRightPanelSurface?.kind === "git-graph" &&
-      graphScope &&
-      (isGraphScopedAway || (activeProject && isGitRepo && gitStatusCwd)) ? (
-      <Suspense fallback={null}>
-        <GitGraphPanel
-          key={`${graphScope.environmentId}:${graphScope.cwd}`}
-          environmentId={graphScope.environmentId}
-          cwd={graphScope.cwd}
-          onOpenCommitFile={openCommitFileDiff}
-          onCurrentBranchRenamed={handleGraphBranchRenamed}
-          onOpenTask={handleGraphOpenTask}
-          onOpenThread={handleGraphOpenThread}
-        />
-      </Suspense>
-    ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
-      activeProject &&
-      activeWorkspaceRoot ? (
-      <Suspense fallback={null}>
-        <FilePreviewPanel
-          key={`${activeProject.environmentId}:${activeWorkspaceRoot}`}
-          environmentId={activeProject.environmentId}
-          cwd={activeWorkspaceRoot}
-          projectName={activeProject.title}
-          threadRef={activeThreadRef}
-          composerDraftTarget={composerDraftTarget}
-          keybindings={keybindings}
-          availableEditors={availableEditors}
-          relativePath={
-            activeRightPanelSurface.kind === "file" ? activeRightPanelSurface.relativePath : null
-          }
-          revealLine={activeFileSurface?.revealLine ?? null}
-          revealRequestId={activeFileSurface?.revealRequestId ?? 0}
-          onOpenFile={openFileSurface}
-          onPendingChange={handleFilePendingChange}
-        />
-      </Suspense>
-    ) : null
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      {rightPanelState.surfaces.map((surface) => {
+        const isActive = activeRightPanelSurface?.id === surface.id;
+        const layer = renderSurfaceLayer(surface, isActive);
+        if (layer === null) return null;
+        return (
+          <div
+            key={surface.id}
+            className={cn(
+              "absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden",
+              !isActive && "invisible pointer-events-none",
+            )}
+            inert={!isActive}
+          >
+            {layer}
+          </div>
+        );
+      })}
+    </div>
   ) : null;
 
   return (

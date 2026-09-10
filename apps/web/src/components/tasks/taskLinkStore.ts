@@ -143,11 +143,14 @@ export function useTaskPanelViewRequest(
   });
   useEffect(() => {
     // Consume on mount too: the request may fire before the panel exists.
+    // Read the payload before clearing the request — the React Compiler
+    // reorders a post-clear `panelViewRequest.taskId` into a null read.
     const consume = () => {
       const request = panelViewRequest;
       if (!request || request.environmentId !== environmentId) return;
+      const { taskId } = request;
       panelViewRequest = null;
-      handlerRef.current(request.taskId);
+      handlerRef.current(taskId);
     };
     consume();
     panelViewListeners.add(consume);

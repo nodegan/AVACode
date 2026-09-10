@@ -89,14 +89,7 @@ type GitGraphDialog =
   | { mode: "delete"; branch: string }
   | { mode: "link"; branch: string; tab: "tasks" | "threads" };
 
-type CommitContextMenuAction =
-  | "create-branch"
-  | `rename:${string}`
-  | `delete:${string}`
-  /** Menu parents that only open a submenu; never resolve as the action. */
-  | `link:${string}`
-  | `link-tasks:${string}`
-  | `link-threads:${string}`;
+type CommitContextMenuAction = "create-branch" | `rename:${string}` | `delete:${string}`;
 
 type GitGraphListItem =
   | {
@@ -539,6 +532,9 @@ export default function GitGraphPanel({
     setBranchName(branch);
     setDialog({ mode: "delete", branch });
   }, []);
+  const openLinkDialog = useCallback((branch: string, tab: "tasks" | "threads") => {
+    setDialog({ mode: "link", branch, tab });
+  }, []);
 
   const handleCommitContextMenu = useCallback(
     async (event: ReactMouseEvent, commit: GitGraphCommit) => {
@@ -550,15 +546,7 @@ export default function GitGraphPanel({
 
       const localRefs = commit.refs.filter((ref) => ref.kind === "local");
       const items: ContextMenuItem<CommitContextMenuAction>[] = [
-        { id: "create-branch", label: "Create branch here" },
-        ...localRefs.map((ref) => ({
-          id: `link:${ref.name}` as const,
-          label: `Link ${ref.name}…`,
-          children: [
-            { id: `link-tasks:${ref.name}` as const, label: "Tasks…" },
-            { id: `link-threads:${ref.name}` as const, label: "Threads…" },
-          ],
-        })),
+        { id: "create-branch", label: "Create branch here", icon: "git-branch" },
         ...localRefs.map((ref) => ({
           id: `rename:${ref.name}` as const,
           label: `Rename ${ref.name}`,
@@ -582,14 +570,6 @@ export default function GitGraphPanel({
       }
       if (action.startsWith("rename:")) {
         openRenameDialog(action.slice("rename:".length));
-        return;
-      }
-      if (action.startsWith("link-tasks:")) {
-        setDialog({ mode: "link", branch: action.slice("link-tasks:".length), tab: "tasks" });
-        return;
-      }
-      if (action.startsWith("link-threads:")) {
-        setDialog({ mode: "link", branch: action.slice("link-threads:".length), tab: "threads" });
         return;
       }
       if (action.startsWith("delete:")) {
@@ -976,10 +956,13 @@ export default function GitGraphPanel({
       );
       const laneTint = laneColor(item.layout.colorIndex);
       const isExpanded = expandedOid === commit.oid;
+      // Hover actions link this commit's branch tip; hidden on history rows
+      // with no local branch to link against.
+      const linkBranch = commit.refs.find((ref) => ref.kind === "local")?.name ?? null;
       return (
         <div
           key={item.key}
-          className="relative flex w-full min-w-0 items-center gap-2 pr-4"
+          className="group/row relative flex w-full min-w-0 items-center gap-2 pr-4"
           style={{ height: GIT_GRAPH_ROW_HEIGHT }}
         >
           <button
@@ -1141,6 +1124,36 @@ export default function GitGraphPanel({
               </span>
             </span>
           </button>
+          {linkBranch ? (
+            <div className="pointer-events-none absolute top-1 right-2 z-10 flex items-center gap-0.5 rounded-lg border border-border/70 bg-background p-0.5 opacity-0 shadow-sm transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100">
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label={`Link tasks to ${linkBranch}`}
+                title={`Link tasks · ${linkBranch}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openLinkDialog(linkBranch, "tasks");
+                }}
+              >
+                <ListTodoIcon className="size-3.5" />
+              </Button>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label={`Link threads to ${linkBranch}`}
+                title={`Link threads · ${linkBranch}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openLinkDialog(linkBranch, "threads");
+                }}
+              >
+                <MessageSquareIcon className="size-3.5" />
+              </Button>
+            </div>
+          ) : null}
         </div>
       );
     },
@@ -1154,6 +1167,7 @@ export default function GitGraphPanel({
       onOpenThread,
       openCreateDialog,
       openDeleteDialog,
+      openLinkDialog,
       openRenameDialog,
       handleBranchSwitch,
       handleCommitContextMenu,

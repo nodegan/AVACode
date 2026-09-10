@@ -13,6 +13,12 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
     },
     { tag: "path", attrs: { d: "m15 5 4 4" } },
   ],
+  "git-branch": [
+    { tag: "line", attrs: { x1: "6", x2: "6", y1: "3", y2: "15" } },
+    { tag: "circle", attrs: { cx: "18", cy: "6", r: "3" } },
+    { tag: "circle", attrs: { cx: "6", cy: "18", r: "3" } },
+    { tag: "path", attrs: { d: "M18 9a9 9 0 0 1-9 9" } },
+  ],
   copy: [
     { tag: "rect", attrs: { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2" } },
     { tag: "path", attrs: { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" } },
