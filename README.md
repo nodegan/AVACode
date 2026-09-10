@@ -20,13 +20,11 @@ AVA Code is a fork of [t3code](https://github.com/pingdotgg/t3code) with tasks i
 
 ## Why
 
-Coding agents produce a lot of output very fast, and it's easy to lose track of. This fork links the three things that actually matter: the task you're working on, the threads where agents did the work, and the branches that hold the result. When you need to know why a change exists, you follow that chain instead of digging through git log and chat history.
+Changes land in branches, reasoning lives in conversations, tasks live in the tracker — nothing connects them. This fork links each task to its threads and branches, and checkpoints every turn so work can be rolled back.
 
 ## Projects, threads, and tasks
 
-A project is a directory on your machine. Each one has its own threads — the durable conversations with your agents — plus its own state and history, so working across several projects doesn't bleed them together.
-
-Tasks come from a sync provider, currently ClickUp, or you can create them manually: pick the workspace to sync from and tasks show up next to your threads. The task you're on, the thread doing the work, and the branch it lands on stay connected.
+A project is a directory on your machine, with its own threads (durable agent conversations) and state. Tasks come from ClickUp sync or are created manually, and each task keeps its threads and branches attached.
 
 ## Requirements
 

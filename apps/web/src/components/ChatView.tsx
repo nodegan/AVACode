@@ -3275,6 +3275,15 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeThreadRef],
   );
+  const handleGraphOpenThread = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: threadRef.environmentId, threadId: threadRef.threadId },
+      });
+    },
+    [navigate],
+  );
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
@@ -6074,6 +6083,7 @@ function ChatViewContent(props: ChatViewProps) {
           onOpenCommitFile={openCommitFileDiff}
           onCurrentBranchRenamed={handleGraphBranchRenamed}
           onOpenTask={handleGraphOpenTask}
+          onOpenThread={handleGraphOpenThread}
         />
       </Suspense>
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&

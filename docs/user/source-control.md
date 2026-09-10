@@ -48,6 +48,7 @@ Open the **Git graph** surface from the right panel (the **+** menu on the panel
 - Branches, tags, and `HEAD` render as badges on their commits
 - Click a commit to expand the files it changed; click a file to open its diff in the Diff panel
 - Use a commit's **⋯** menu to create a branch at that commit, or rename one of its local branches
+- Right-click a commit and choose **Link** on one of its branches to attach tasks or threads to that branch; linked tasks and threads appear on the branch in the graph and open with one click, and the same links show on the task (Tasks panel) and on the thread (its branch selector)
 - Use **Load more** at the bottom to walk further back in history
 - The graph follows the project picked in the sidebar's project scope selector; on **All projects** it shows the current thread's project, and an open graph stays with you when you switch threads across projects
 

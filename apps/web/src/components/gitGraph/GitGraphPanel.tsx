@@ -3,9 +3,11 @@ import type {
   EnvironmentId,
   GitGraphCommit,
   GitGraphCommitFile,
+  ScopedThreadRef,
   Task,
   VcsStatusResult,
 } from "@t3tools/contracts";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -17,6 +19,7 @@ import {
   GitCommitVerticalIcon,
   ListTodoIcon,
   Loader2Icon,
+  MessageSquareIcon,
   RefreshCwIcon,
   TagIcon,
 } from "lucide-react";
@@ -43,11 +46,13 @@ import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { gitEnvironment } from "../../state/git";
 import { vcsEnvironment } from "../../state/vcs";
+import { useProjects, useThreadShells } from "../../state/entities";
 import { usePreparedConnection } from "../../state/session";
 import { fetchTasksQuery } from "../tasks/taskApi";
 import { TaskStatusBadge } from "../tasks/TaskDetailsDialog";
 import { useTaskLinksChangedVersion } from "../tasks/taskLinkStore";
 import { cn } from "../../lib/utils";
+import { BranchLinkDialog } from "./BranchLinkDialog";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -81,9 +86,17 @@ const laneColor = (colorIndex: number): string =>
 type GitGraphDialog =
   | { mode: "create"; oid: string }
   | { mode: "rename"; branch: string }
-  | { mode: "delete"; branch: string };
+  | { mode: "delete"; branch: string }
+  | { mode: "link"; branch: string; tab: "tasks" | "threads" };
 
-type CommitContextMenuAction = "create-branch" | `rename:${string}` | `delete:${string}`;
+type CommitContextMenuAction =
+  | "create-branch"
+  | `rename:${string}`
+  | `delete:${string}`
+  /** Menu parents that only open a submenu; never resolve as the action. */
+  | `link:${string}`
+  | `link-tasks:${string}`
+  | `link-threads:${string}`;
 
 type GitGraphListItem =
   | {
@@ -98,7 +111,7 @@ type GitGraphListItem =
       key: string;
       commit: GitGraphCommit;
       layout: GitGraphRowLayout;
-      hasTaskSection: boolean;
+      hasLinkSections: boolean;
     }
   | {
       type: "file-group";
@@ -116,6 +129,16 @@ type GitGraphListItem =
       branch: string;
       tasks: ReadonlyArray<Task>;
       layout: GitGraphRowLayout;
+      isFirst: boolean;
+    }
+  | {
+      type: "thread-branches";
+      key: string;
+      oid: string;
+      branch: string;
+      threads: ReadonlyArray<EnvironmentThreadShell>;
+      layout: GitGraphRowLayout;
+      isFirst: boolean;
     };
 
 const FILE_STATUS_PRESENTATION: Record<
@@ -280,6 +303,8 @@ interface GitGraphPanelProps {
   onCurrentBranchRenamed: (newBranch: string) => void;
   /** Opens the tasks surface focused on the given task. */
   onOpenTask: (taskId: string) => void;
+  /** Navigates to a thread picked from the graph. */
+  onOpenThread: (threadRef: ScopedThreadRef) => void;
 }
 
 export default function GitGraphPanel({
@@ -288,6 +313,7 @@ export default function GitGraphPanel({
   onOpenCommitFile,
   onCurrentBranchRenamed,
   onOpenTask,
+  onOpenThread,
 }: GitGraphPanelProps) {
   const settings = useClientSettings();
   const [limit, setLimit] = useState(GIT_GRAPH_LOAD_MORE_STEP);
@@ -317,6 +343,19 @@ export default function GitGraphPanel({
   // instantly whenever any surface mutates a task (link/unlink/create).
   const prepared = usePreparedConnection(environmentId);
   const taskLinksVersion = useTaskLinksChangedVersion();
+  const projects = useProjects();
+  const threadShells = useThreadShells();
+  const repoProjectIds = useMemo(
+    () =>
+      new Set(
+        projects
+          .filter(
+            (project) => project.environmentId === environmentId && project.workspaceRoot === cwd,
+          )
+          .map((project) => project.id),
+      ),
+    [cwd, environmentId, projects],
+  );
   const [linkedTasks, setLinkedTasks] = useState<ReadonlyArray<Task>>([]);
   useEffect(() => {
     if (prepared._tag === "None") return;
@@ -358,6 +397,29 @@ export default function GitGraphPanel({
     return map;
   }, [linkedTasks]);
 
+  // Threads of this repository, keyed by their branch: a thread belongs to
+  // the repo when its project root or its own worktree is the graph's cwd.
+  const threadsByBranch = useMemo(() => {
+    const map = new Map<string, EnvironmentThreadShell[]>();
+    const repoThreadShells = threadShells.filter(
+      (thread) =>
+        thread.environmentId === environmentId &&
+        thread.branch !== null &&
+        (repoProjectIds.has(thread.projectId) || thread.worktreePath === cwd),
+    );
+    for (const thread of repoThreadShells) {
+      const branchName = thread.branch;
+      if (branchName === null) continue;
+      const bucket = map.get(branchName);
+      if (bucket) {
+        bucket.push(thread);
+      } else {
+        map.set(branchName, [thread]);
+      }
+    }
+    return map;
+  }, [cwd, environmentId, repoProjectIds, threadShells]);
+
   const commitFilesQuery = useEnvironmentQuery(
     expandedOid === null
       ? null
@@ -397,10 +459,15 @@ export default function GitGraphPanel({
         isHead: commit.oid === headOid,
       });
       if (expanded) {
-        // Linked tasks lead the expanded card, one section per branch ref.
+        // Linked tasks and threads lead the expanded card, one section per
+        // branch ref, tasks first.
         const taskRefs = commit.refs.filter(
           (ref) => ref.kind === "local" && (tasksByBranch.get(ref.name) ?? []).length > 0,
         );
+        const threadRefs = commit.refs.filter(
+          (ref) => ref.kind === "local" && (threadsByBranch.get(ref.name) ?? []).length > 0,
+        );
+        let isFirstSection = true;
         for (const ref of taskRefs) {
           const tasks = tasksByBranch.get(ref.name) ?? [];
           items.push({
@@ -410,14 +477,29 @@ export default function GitGraphPanel({
             branch: ref.name,
             tasks,
             layout: row,
+            isFirst: isFirstSection,
           });
+          isFirstSection = false;
+        }
+        for (const ref of threadRefs) {
+          const threads = threadsByBranch.get(ref.name) ?? [];
+          items.push({
+            type: "thread-branches",
+            key: `thread-branches:${commit.oid}:${ref.name}`,
+            oid: commit.oid,
+            branch: ref.name,
+            threads,
+            layout: row,
+            isFirst: isFirstSection,
+          });
+          isFirstSection = false;
         }
         items.push({
           type: "commit-detail",
           key: `detail:${commit.oid}`,
           commit,
           layout: row,
-          hasTaskSection: taskRefs.length > 0,
+          hasLinkSections: taskRefs.length > 0 || threadRefs.length > 0,
         });
         const files = commitFilesQuery.data?.files ?? [];
         if (files.length > 0) {
@@ -440,6 +522,7 @@ export default function GitGraphPanel({
     headOid,
     layout.rows,
     linkedTasks,
+    threadsByBranch,
     uncommittedExpanded,
     uncommittedFiles,
   ]);
@@ -469,6 +552,14 @@ export default function GitGraphPanel({
       const items: ContextMenuItem<CommitContextMenuAction>[] = [
         { id: "create-branch", label: "Create branch here" },
         ...localRefs.map((ref) => ({
+          id: `link:${ref.name}` as const,
+          label: `Link ${ref.name}…`,
+          children: [
+            { id: `link-tasks:${ref.name}` as const, label: "Tasks…" },
+            { id: `link-threads:${ref.name}` as const, label: "Threads…" },
+          ],
+        })),
+        ...localRefs.map((ref) => ({
           id: `rename:${ref.name}` as const,
           label: `Rename ${ref.name}`,
           icon: "pencil",
@@ -491,6 +582,14 @@ export default function GitGraphPanel({
       }
       if (action.startsWith("rename:")) {
         openRenameDialog(action.slice("rename:".length));
+        return;
+      }
+      if (action.startsWith("link-tasks:")) {
+        setDialog({ mode: "link", branch: action.slice("link-tasks:".length), tab: "tasks" });
+        return;
+      }
+      if (action.startsWith("link-threads:")) {
+        setDialog({ mode: "link", branch: action.slice("link-threads:".length), tab: "threads" });
         return;
       }
       if (action.startsWith("delete:")) {
@@ -700,7 +799,7 @@ export default function GitGraphPanel({
             key={item.key}
             className={cn(
               "mr-4 space-y-1.5 border border-border/70 bg-muted/30 p-2.5",
-              item.hasTaskSection ? "mb-1 rounded-b-lg border-t-0" : "mt-2 mb-1 rounded-lg",
+              item.hasLinkSections ? "mb-1 rounded-b-lg border-t-0" : "mt-2 mb-1 rounded-lg",
             )}
             style={{ marginLeft: rowGraphWidth(item.layout) + 10 }}
           >
@@ -770,7 +869,10 @@ export default function GitGraphPanel({
         return (
           <div
             key={item.key}
-            className="mt-2 mr-4 rounded-t-lg border border-b-0 border-border/70 bg-muted/30 p-2.5"
+            className={cn(
+              "mr-4 border border-b-0 border-border/70 bg-muted/30 p-2.5",
+              item.isFirst && "mt-2 rounded-t-lg",
+            )}
             style={{ marginLeft: rowGraphWidth(item.layout) + 10 }}
           >
             <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
@@ -812,6 +914,51 @@ export default function GitGraphPanel({
                     aria-label={`Open task ${task.title}`}
                     title="Open task"
                     onClick={() => onOpenTask(task.id)}
+                  >
+                    <ArrowUpRightIcon className="size-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      if (item.type === "thread-branches") {
+        return (
+          <div
+            key={item.key}
+            className={cn(
+              "mr-4 border border-b-0 border-border/70 bg-muted/30 p-2.5",
+              item.isFirst && "mt-2 rounded-t-lg",
+            )}
+            style={{ marginLeft: rowGraphWidth(item.layout) + 10 }}
+          >
+            <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <GitBranchIcon className="size-3 shrink-0 text-sky-600 dark:text-sky-400" />
+              <span className="min-w-0 truncate">{item.branch}</span>
+              <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+                ·{" "}
+                {item.threads.length === 1
+                  ? "1 linked thread"
+                  : `${item.threads.length} linked threads`}
+              </span>
+            </p>
+            <div className="mt-1.5 space-y-1.5">
+              {item.threads.map((thread) => (
+                <div key={thread.id} className="flex min-w-0 items-center gap-2">
+                  <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-xs" title={thread.title}>
+                    {thread.title}
+                  </span>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    className="gap-1.5"
+                    aria-label={`Open thread ${thread.title}`}
+                    title="Open thread"
+                    onClick={() => onOpenThread({ environmentId, threadId: thread.id })}
                   >
                     <ArrowUpRightIcon className="size-3.5" />
                   </Button>
@@ -880,6 +1027,24 @@ export default function GitGraphPanel({
                         >
                           <ListTodoIcon className="size-3" />
                           {branchTasks.length}
+                        </span>
+                      );
+                    })}
+                  {commit.refs
+                    .filter(
+                      (ref) =>
+                        ref.kind === "local" && (threadsByBranch.get(ref.name) ?? []).length > 0,
+                    )
+                    .map((ref) => {
+                      const branchThreads = threadsByBranch.get(ref.name) ?? [];
+                      return (
+                        <span
+                          key={`threads:${ref.name}`}
+                          title={branchThreads.map((thread) => thread.title).join("\n")}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-xs font-medium leading-none text-sky-700 dark:text-sky-300"
+                        >
+                          <MessageSquareIcon className="size-3" />
+                          {branchThreads.length}
                         </span>
                       );
                     })}
@@ -981,10 +1146,12 @@ export default function GitGraphPanel({
     },
     [
       currentRefName,
+      environmentId,
       expandedOid,
       headMessageIndent,
       onOpenCommitFile,
       onOpenTask,
+      onOpenThread,
       openCreateDialog,
       openDeleteDialog,
       openRenameDialog,
@@ -992,6 +1159,7 @@ export default function GitGraphPanel({
       handleCommitContextMenu,
       settings.timestampFormat,
       tasksByBranch,
+      threadsByBranch,
       uncommittedExpanded,
     ],
   );
@@ -1064,8 +1232,17 @@ export default function GitGraphPanel({
           />
         )}
       </div>
+      {dialog?.mode === "link" ? (
+        <BranchLinkDialog
+          environmentId={environmentId}
+          cwd={cwd}
+          branch={dialog.branch}
+          initialTab={dialog.tab}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
       <Dialog
-        open={dialog !== null}
+        open={dialog !== null && dialog.mode !== "link"}
         onOpenChange={(nextOpen) => {
           if (dialogPending) return;
           if (!nextOpen) setDialog(null);
